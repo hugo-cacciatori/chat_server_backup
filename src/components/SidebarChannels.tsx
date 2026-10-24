@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
   Archive,
-  FolderCog,
+  ExternalLink,
+  FolderOpen,
+  FolderSearch,
   Hash,
   LayoutList,
   Lock,
@@ -10,6 +12,7 @@ import {
   Save,
   Search,
   Server,
+  Settings,
   Trash2,
   UserCircle2,
 } from "lucide-react";
@@ -28,6 +31,9 @@ interface SidebarChannelsProps {
   onSelectChannel: (channelId: string) => void;
   onOpenGlobalSearch: () => void;
   onChangeBackupRoot: (newRoot: string) => void;
+  onBrowseBackupRoot?: () => Promise<void> | void;
+  onOpenSettings?: () => void;
+  onOpenFolderInExplorer?: (folderPath: string) => void;
   onSaveChanges?: () => Promise<void> | void;
   onDiscardChanges?: () => void;
   onDeleteEditedBackup?: () => Promise<void> | void;
@@ -47,6 +53,9 @@ export function SidebarChannels({
   onSelectChannel,
   onOpenGlobalSearch,
   onChangeBackupRoot,
+  onBrowseBackupRoot,
+  onOpenSettings,
+  onOpenFolderInExplorer,
   onSaveChanges,
   onDiscardChanges,
   onDeleteEditedBackup,
@@ -123,14 +132,20 @@ export function SidebarChannels({
           <button
             type="button"
             onClick={() => {
-              setRootInput(backupRootPath);
-              setAuthorInput(localAuthorName);
-              setEditingRoot((v) => !v);
+              if (onOpenSettings) {
+                onOpenSettings();
+              } else {
+                setRootInput(backupRootPath);
+                setAuthorInput(localAuthorName);
+                setEditingRoot((v) => !v);
+              }
             }}
-            title="Configure backup folder & local author profile"
-            className="rounded-md p-1.5 text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
+            title="Open Settings (Ctrl+,)"
+            aria-label="Open Settings"
+            className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-300 hover:border-slate-700 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
           >
-            <FolderCog className="h-4 w-4" />
+            <Settings className="h-3.5 w-3.5 text-indigo-400" />
+            <span>Settings</span>
           </button>
         </div>
 
@@ -195,9 +210,74 @@ export function SidebarChannels({
           </div>
         )}
 
-        {/* Backup Folder & Local Author Profile Editor */}
+        {/* Direct Backup Folder Bar (right above Snapshot Selector) */}
+        <div className="mt-2.5">
+          <div className="mb-1 flex items-center justify-between gap-1">
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              <FolderOpen className="h-3 w-3" />
+              <span>Backup Folder</span>
+            </span>
+            <div className="flex items-center gap-1">
+              {onBrowseBackupRoot && (
+                <button
+                  type="button"
+                  onClick={() => onBrowseBackupRoot()}
+                  title="Browse and select a backup history folder on your PC"
+                  aria-label="Browse backup folder"
+                  className="inline-flex items-center gap-1 rounded bg-indigo-600/20 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-300 ring-1 ring-indigo-500/30 hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
+                >
+                  <FolderSearch className="h-3 w-3" />
+                  <span>Browse…</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setRootInput(backupRootPath);
+                  setAuthorInput(localAuthorName);
+                  setEditingRoot((v) => !v);
+                }}
+                title="Edit folder path manually"
+                aria-label="Edit backup folder path"
+                className="rounded p-1 text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
+              >
+                <PencilLine className="h-3 w-3" />
+              </button>
+              {onOpenFolderInExplorer && backupRootPath && (
+                <button
+                  type="button"
+                  onClick={() => onOpenFolderInExplorer(backupRootPath)}
+                  title="Open backup folder in File Explorer"
+                  aria-label="Open backup folder in File Explorer"
+                  className="rounded p-1 text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
+                >
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (onBrowseBackupRoot) {
+                void onBrowseBackupRoot();
+              } else {
+                setRootInput(backupRootPath);
+                setAuthorInput(localAuthorName);
+                setEditingRoot((v) => !v);
+              }
+            }}
+            title={`Active backup folder: ${backupRootPath || "history"} (Click to browse)`}
+            className="flex w-full items-center justify-between gap-1.5 rounded-lg border border-slate-800/90 bg-slate-900/70 px-2.5 py-1.5 text-left font-mono text-[11px] text-slate-300 hover:border-slate-700 hover:bg-slate-900 hover:text-white transition-colors cursor-pointer"
+          >
+            <span className="truncate">{backupRootPath || "history"}</span>
+          </button>
+        </div>
+
+        {/* Inline Backup Folder & Local Author Profile Editor */}
         {editingRoot && (
-          <form onSubmit={handleSaveRoot} className="mt-2.5 space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5">
+          <form onSubmit={handleSaveRoot} className="mt-2 space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5">
             <div>
               <label className="block text-[11px] font-medium text-slate-400">
                 Backup history directory:

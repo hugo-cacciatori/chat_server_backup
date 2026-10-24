@@ -46,6 +46,8 @@ fn current_local_author() -> Author {
 pub struct AppSettings {
     #[serde(default)]
     pub backup_root: String,
+    #[serde(default)]
+    pub recent_backup_roots: Vec<String>,
     #[serde(default = "default_author_name")]
     pub local_author_name: String,
     #[serde(default = "default_author_id")]
@@ -64,9 +66,23 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             backup_root: String::new(),
+            recent_backup_roots: Vec::new(),
             local_author_name: default_author_name(),
             local_author_id: default_author_id(),
         }
+    }
+}
+
+pub fn push_recent_backup_root(cfg: &mut AppSettings, new_root: &str) {
+    let trimmed = new_root.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    cfg.recent_backup_roots
+        .retain(|existing| !existing.eq_ignore_ascii_case(trimmed));
+    cfg.recent_backup_roots.insert(0, trimmed.to_string());
+    if cfg.recent_backup_roots.len() > 8 {
+        cfg.recent_backup_roots.truncate(8);
     }
 }
 
@@ -132,6 +148,10 @@ fn get_app_settings() -> AppSettings {
     if cfg.backup_root.is_empty() {
         cfg.backup_root = default_history_dir().to_string_lossy().to_string();
     }
+    if !cfg.backup_root.is_empty() {
+        let root_copy = cfg.backup_root.clone();
+        push_recent_backup_root(&mut cfg, &root_copy);
+    }
     cfg
 }
 
@@ -139,7 +159,11 @@ fn get_app_settings() -> AppSettings {
 fn set_backup_root(backup_root: String) -> Result<Vec<BackupDescriptor>, String> {
     let s_path = settings_file_path();
     let mut cfg = load_app_settings_from(&s_path);
-    cfg.backup_root = backup_root.trim().to_string();
+    let trimmed = backup_root.trim().to_string();
+    cfg.backup_root = trimmed.clone();
+    if !trimmed.is_empty() {
+        push_recent_backup_root(&mut cfg, &trimmed);
+    }
     save_app_settings_to(&cfg, &s_path)?;
 
     let dir = if cfg.backup_root.is_empty() {
@@ -148,6 +172,48 @@ fn set_backup_root(backup_root: String) -> Result<Vec<BackupDescriptor>, String>
         PathBuf::from(&cfg.backup_root)
     };
     Ok(discover_backups(&dir))
+}
+
+#[tauri::command]
+fn remove_recent_backup_root(folder_path: String) -> Result<AppSettings, String> {
+    let s_path = settings_file_path();
+    let mut cfg = load_app_settings_from(&s_path);
+    let trimmed = folder_path.trim();
+    cfg.recent_backup_roots
+        .retain(|existing| !existing.eq_ignore_ascii_case(trimmed));
+    save_app_settings_to(&cfg, &s_path)?;
+    if cfg.backup_root.is_empty() {
+        cfg.backup_root = default_history_dir().to_string_lossy().to_string();
+    }
+    Ok(cfg)
+}
+
+#[tauri::command]
+fn pick_backup_folder(initial_dir: Option<String>) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new().set_title("Select Backup History Folder");
+    let candidate = initial_dir
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            let cfg = load_app_settings_from(&settings_file_path());
+            if !cfg.backup_root.is_empty() {
+                Some(PathBuf::from(cfg.backup_root))
+            } else {
+                Some(default_history_dir())
+            }
+        });
+
+    if let Some(dir) = candidate {
+        if dir.is_dir() {
+            dialog = dialog.set_directory(&dir);
+        } else if let Some(parent) = dir.parent().filter(|p| p.is_dir()) {
+            dialog = dialog.set_directory(parent);
+        }
+    }
+
+    dialog
+        .pick_folder()
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -416,6 +482,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
             set_backup_root,
+            remove_recent_backup_root,
+            pick_backup_folder,
             set_local_author_profile,
             list_discovered_backups,
             load_backup_command,
@@ -923,6 +991,7 @@ mod tests {
         let s_file = tmp.path().join("settings.json");
         let cfg = AppSettings {
             backup_root: "custom/history".to_string(),
+            recent_backup_roots: vec!["custom/history".to_string()],
             local_author_name: "Hugo".to_string(),
             local_author_id: "u1".to_string(),
         };
@@ -1059,5 +1128,27 @@ mod tests {
         assert!(code.contains("oldest_first=True"));
         assert!(code.contains("[e.to_dict() for e in message.embeds]"));
         assert!(!code.contains("str(e.to_dict())"));
+    }
+
+    #[test]
+    fn test_recent_backup_roots_persistence_and_deduplication() {
+        let tmp = TempDir::new().unwrap();
+        let s_file = tmp.path().join("settings.json");
+
+        let mut cfg = load_app_settings_from(&s_file);
+        assert!(cfg.recent_backup_roots.is_empty());
+
+        push_recent_backup_root(&mut cfg, r"C:\Backups\ServerA\history");
+        push_recent_backup_root(&mut cfg, r"F:\Archive\ServerB\history");
+        // Re-adding ServerA (case-insensitive) should move it to index 0 without duplicating
+        push_recent_backup_root(&mut cfg, r"c:\backups\servera\history");
+
+        assert_eq!(cfg.recent_backup_roots.len(), 2);
+        assert_eq!(cfg.recent_backup_roots[0], r"c:\backups\servera\history");
+        assert_eq!(cfg.recent_backup_roots[1], r"F:\Archive\ServerB\history");
+
+        save_app_settings_to(&cfg, &s_file).unwrap();
+        let reloaded = load_app_settings_from(&s_file);
+        assert_eq!(reloaded.recent_backup_roots, cfg.recent_backup_roots);
     }
 }

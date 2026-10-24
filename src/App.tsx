@@ -25,6 +25,7 @@ import { MessageStreamPane } from "./components/MessageStreamPane";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { LightboxModal } from "./components/LightboxModal";
 import { PdfReaderModal } from "./components/PdfReaderModal";
+import { SettingsModal } from "./components/SettingsModal";
 
 interface NavHistoryEntry {
   channelId: string;
@@ -34,6 +35,7 @@ interface NavHistoryEntry {
 
 interface AppSettings {
   backup_root: string;
+  recent_backup_roots?: string[];
   local_author_name: string;
   local_author_id: string;
 }
@@ -41,7 +43,9 @@ interface AppSettings {
 export function App() {
   const [backups, setBackups] = useState<BackupDescriptor[]>([]);
   const [backupRootPath, setBackupRootPath] = useState<string>("history");
+  const [recentBackupRoots, setRecentBackupRoots] = useState<string[]>([]);
   const [localAuthorName, setLocalAuthorName] = useState<string>("Local User");
+  const [localAuthorId, setLocalAuthorId] = useState<string>("local-user-1");
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
@@ -66,6 +70,7 @@ export function App() {
 
   // Modals
   const [globalSearchOpen, setGlobalSearchOpen] = useState<boolean>(false);
+  const [settingsOpen, setSettingsOpen] = useState<boolean>(false);
   const [lightboxState, setLightboxState] = useState<{
     src: string | null;
     caption: string;
@@ -140,8 +145,14 @@ export function App() {
         if (cfg.backup_root) {
           setBackupRootPath(cfg.backup_root);
         }
+        if (Array.isArray(cfg.recent_backup_roots)) {
+          setRecentBackupRoots(cfg.recent_backup_roots);
+        }
         if (cfg.local_author_name) {
           setLocalAuthorName(cfg.local_author_name);
+        }
+        if (cfg.local_author_id) {
+          setLocalAuthorId(cfg.local_author_id);
         }
         return invoke<BackupDescriptor[]>("list_discovered_backups", {
           customDir: cfg.backup_root || null,
@@ -163,12 +174,15 @@ export function App() {
       });
   }, [loadSnapshot]);
 
-  // Global keyboard shortcuts: Ctrl+K (Global Search), Alt+Left (Back), Alt+Right (Forward)
+  // Global keyboard shortcuts: Ctrl+K (Global Search), Ctrl+, (Settings), Alt+Left (Back), Alt+Right (Forward)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setGlobalSearchOpen((open) => !open);
+      } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen((open) => !open);
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
         if (historyIndex > 0) {
@@ -271,22 +285,60 @@ export function App() {
     [currentBackup, handleNavigateToLocation],
   );
 
-  const handleChangeBackupRoot = (newRoot: string) => {
-    setBackupRootPath(newRoot);
-    invoke<BackupDescriptor[]>("set_backup_root", {
-      backupRoot: newRoot,
-    })
-      .then((items) => {
-        setBackups(items);
-        if (items.length > 0) {
-          loadSnapshot(items[0].json_path);
-        } else {
-          setCurrentBackup(null);
-          setSelectedBackupPath("");
-        }
+  const handleChangeBackupRoot = useCallback(
+    (newRoot: string) => {
+      setBackupRootPath(newRoot);
+      invoke<BackupDescriptor[]>("set_backup_root", {
+        backupRoot: newRoot,
       })
-      .catch((err) => console.error("Failed to set backup root:", err));
-  };
+        .then((items) => {
+          setBackups(items);
+          if (items.length > 0) {
+            loadSnapshot(items[0].json_path);
+          } else {
+            setCurrentBackup(null);
+            setSelectedBackupPath("");
+          }
+          return invoke<AppSettings>("get_app_settings");
+        })
+        .then((cfg) => {
+          if (cfg.backup_root) {
+            setBackupRootPath(cfg.backup_root);
+          }
+          if (Array.isArray(cfg.recent_backup_roots)) {
+            setRecentBackupRoots(cfg.recent_backup_roots);
+          }
+        })
+        .catch((err) => console.error("Failed to set backup root:", err));
+    },
+    [loadSnapshot],
+  );
+
+  const handleBrowseBackupRoot = useCallback(async () => {
+    try {
+      const picked = await invoke<string | null>("pick_backup_folder", {
+        initialDir: backupRootPath || null,
+      });
+      if (picked && picked.trim()) {
+        handleChangeBackupRoot(picked.trim());
+      }
+    } catch (err) {
+      console.error("Failed to pick backup folder:", err);
+    }
+  }, [backupRootPath, handleChangeBackupRoot]);
+
+  const handleRemoveRecentBackupRoot = useCallback(async (folderPath: string) => {
+    try {
+      const cfg = await invoke<AppSettings>("remove_recent_backup_root", {
+        folderPath,
+      });
+      if (Array.isArray(cfg.recent_backup_roots)) {
+        setRecentBackupRoots(cfg.recent_backup_roots);
+      }
+    } catch (err) {
+      console.error("Failed to remove recent backup folder:", err);
+    }
+  }, []);
 
   const handleOpenExternalUrl = (url: string) => {
     invoke("open_external_url", { url }).catch(() => {
@@ -344,12 +396,18 @@ export function App() {
     [backupRootPath, selectedChannelId, selectedPostId],
   );
 
-  const handleChangeLocalAuthor = async (authorName: string) => {
+  const handleChangeLocalAuthor = async (
+    authorName: string,
+    authorId?: string,
+  ) => {
     setLocalAuthorName(authorName);
+    if (authorId) {
+      setLocalAuthorId(authorId);
+    }
     try {
       await invoke<AppSettings>("set_local_author_profile", {
         authorName,
-        authorId: null,
+        authorId: authorId ?? null,
       });
     } catch (err) {
       console.error("Failed to save local author profile:", err);
@@ -500,6 +558,9 @@ export function App() {
         onSelectChannel={handleSelectChannel}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
         onChangeBackupRoot={handleChangeBackupRoot}
+        onBrowseBackupRoot={handleBrowseBackupRoot}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenFolderInExplorer={handleOpenFileDefault}
         onSaveChanges={handleSaveChanges}
         onDiscardChanges={handleDiscardChanges}
         onDeleteEditedBackup={handleDeleteEditedBackup}
@@ -603,6 +664,24 @@ export function App() {
         }
         onOpenFileDefault={handleOpenFileDefault}
         onRevealInExplorer={handleRevealInExplorer}
+      />
+
+      {/* Settings Modal (Ctrl+,) */}
+      <SettingsModal
+        isOpen={settingsOpen}
+        backupRootPath={backupRootPath}
+        recentBackupRoots={recentBackupRoots}
+        localAuthorName={localAuthorName}
+        localAuthorId={localAuthorId}
+        snapshotCount={backups.length}
+        onClose={() => setSettingsOpen(false)}
+        onBrowseBackupRoot={handleBrowseBackupRoot}
+        onApplyBackupRoot={handleChangeBackupRoot}
+        onRemoveRecentBackupRoot={handleRemoveRecentBackupRoot}
+        onOpenFolderInExplorer={handleOpenFileDefault}
+        onSaveAuthorProfile={(name, id) => {
+          void handleChangeLocalAuthor(name, id);
+        }}
       />
     </div>
   );

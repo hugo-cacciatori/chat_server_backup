@@ -9,11 +9,11 @@ A local desktop mirror and non-destructive editor for exported **Discord** serve
 ChatServerBackup lets you keep a complete, offline copy of your Discord server—including text channels, forum channels, tags, threads, embeds, and all uploaded files—and continue reading, searching, or updating that archive locally on your computer without needing Discord or an internet connection.
 
 1. **Export your Discord server with the bot:**
-   - Invite your Discord bot to the server you want to back up and set its token in `CHAT_BACKUP_BOT_TOKEN` (via environment variable or `.env`).
+   - Invite your Discord bot to the server you want to back up and set its token in `CHAT_BACKUP_BOT_TOKEN` (and optional custom folder `CHAT_BACKUP_HISTORY_DIR`) via environment variables or `.env`.
    - Run `python bot/export_bot.py` and type `!export` in any channel on your Discord server.
    - The bot crawls every text channel, forum channel, active thread, and archived thread, downloading all messages, embeds, and file attachments into `history/<YYYY-MM-DD>/server_export_<YYYY-MM-DD>.json` alongside an `assets_<YYYY-MM-DD>/` folder.
 2. **Browse and search offline in the desktop app:**
-   - Launch the **ChatServerBackup** desktop app. It automatically detects your `history/` folder (or lets you pick any backup folder).
+   - Launch the **ChatServerBackup** desktop app. It automatically detects your `history/` folder, or you can switch folders with one click using the **Browse…** button right above the Snapshot selector or in the **Settings** modal (`Ctrl+,`, which also remembers your recent backup folders).
    - Pick a backup date from the top bar, click through channels, filter forum posts by tags, use global search (`Ctrl+K`), follow internal jump links across channels/threads, and view images, audio, video, PDFs, Office docs (`.docx`), code files, and archives (`.zip`/`.7z`) directly inside the app.
 3. **Edit or add to your archive safely (non-destructive):**
    - You can post new messages, create new forum threads, attach local files from your PC, or edit/delete existing messages inside the desktop app to keep taking notes or organizing your archive offline.

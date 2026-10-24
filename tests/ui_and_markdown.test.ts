@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { parseMarkdownBlocks, tokenizeCodeLine } from "../src/lib/markdown";
 import { parseInternalChannelUrl, resolveTargetInBackup } from "../src/lib/links";
 import { filterAndSortPosts } from "../src/components/PostListPane";
 import { searchAcrossBackup } from "../src/components/GlobalSearchModal";
 import { cleanDisplayFilename } from "../src/components/MessageCard";
+import { SidebarChannels } from "../src/components/SidebarChannels";
+import { SettingsModal } from "../src/components/SettingsModal";
 import {
   formatByteSize,
   formatDurationSeconds,
@@ -254,5 +258,67 @@ describe("In-Memory Session Editing (Unsaved Until Explicit Save)", () => {
       afterDelete.channels[0].posts.find((p) => p.id === createdPostId)!
         .messages,
     ).toHaveLength(1);
+  });
+});
+
+describe("Backup Folder Controls & Settings Modal UI", () => {
+  it("renders the direct Backup Folder bar and Browse button in SidebarChannels and full SettingsModal", () => {
+    const sidebarHtml = renderToStaticMarkup(
+      createElement(SidebarChannels, {
+        backups: [
+          {
+            date_label: "2026-10-20",
+            json_path: "F:/server_backup/history/2026-10-20/server_export_2026-10-20.json",
+            is_edited: false,
+            display_label: "2026-10-20 (Original)",
+            based_on_filename: "server_export_2026-10-20.json",
+          },
+        ],
+        selectedBackupPath:
+          "F:/server_backup/history/2026-10-20/server_export_2026-10-20.json",
+        currentBackup: sampleBackup,
+        selectedChannelId: "1542028566022201344",
+        backupRootPath: "F:\\server_backup\\history",
+        localAuthorName: "Hugo",
+        hasUnsavedChanges: false,
+        hasEditedBackupForDate: false,
+        onSelectBackup: () => {},
+        onSelectChannel: () => {},
+        onOpenGlobalSearch: () => {},
+        onChangeBackupRoot: () => {},
+        onBrowseBackupRoot: () => {},
+        onOpenSettings: () => {},
+      }),
+    );
+
+    expect(sidebarHtml).toContain("Backup Folder");
+    expect(sidebarHtml).toContain("Browse…");
+    expect(sidebarHtml).toContain("Settings");
+    expect(sidebarHtml).toContain("F:\\server_backup\\history");
+
+    const modalHtml = renderToStaticMarkup(
+      createElement(SettingsModal, {
+        isOpen: true,
+        backupRootPath: "F:\\server_backup\\history",
+        recentBackupRoots: [
+          "F:\\server_backup\\history",
+          "C:\\OtherBackups\\history",
+        ],
+        localAuthorName: "Hugo",
+        localAuthorId: "hugo-1",
+        snapshotCount: 14,
+        onClose: () => {},
+        onBrowseBackupRoot: () => {},
+        onApplyBackupRoot: () => {},
+        onSaveAuthorProfile: () => {},
+      }),
+    );
+
+    expect(modalHtml).toContain("Backup History Folder");
+    expect(modalHtml).toContain("Browse Folder…");
+    expect(modalHtml).toContain("14 snapshots found");
+    expect(modalHtml).toContain("Recent Backup Folders");
+    expect(modalHtml).toContain("C:\\OtherBackups\\history");
+    expect(modalHtml).toContain("Local Author Profile");
   });
 });

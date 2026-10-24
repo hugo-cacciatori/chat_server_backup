@@ -27,10 +27,8 @@ from discord.ext import commands
 
 
 def load_token_from_env(env_file: Path | None = None) -> str:
-    """Resolve `CHAT_BACKUP_BOT_TOKEN` from environment or optional `.env` file."""
+    """Resolve `CHAT_BACKUP_BOT_TOKEN` (and optional `CHAT_BACKUP_HISTORY_DIR`) from environment or `.env` file."""
     token = os.environ.get("CHAT_BACKUP_BOT_TOKEN", "").strip()
-    if token:
-        return token
 
     candidate = env_file or Path(".env")
     if candidate.is_file():
@@ -39,10 +37,15 @@ def load_token_from_env(env_file: Path | None = None) -> str:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, val = line.split("=", 1)
-            if key.strip() == "CHAT_BACKUP_BOT_TOKEN":
-                cleaned = val.strip().strip("'").strip('"')
-                if cleaned:
-                    return cleaned
+            k = key.strip()
+            cleaned = val.strip().strip("'").strip('"')
+            if k == "CHAT_BACKUP_BOT_TOKEN" and cleaned and not token:
+                token = cleaned
+            elif k == "CHAT_BACKUP_HISTORY_DIR" and cleaned and not os.environ.get("CHAT_BACKUP_HISTORY_DIR"):
+                os.environ["CHAT_BACKUP_HISTORY_DIR"] = cleaned
+
+    if token:
+        return token
 
     raise RuntimeError(
         "Missing bot token. Set the CHAT_BACKUP_BOT_TOKEN environment variable "
