@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "chat-server-backup"
+version = "0.1.0"
+description = "Local desktop mirror and non-destructive editor for chat server backups"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "pyside6-essentials>=6.8.0",
+    "markdown>=3.7",
+    "pygments>=2.18.0",
+    "pypdf>=5.0.0",
+    "py7zr>=0.22.0",
+]
+
+[project.scripts]
+chat-backup = "chat_backup.app:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-qt>=4.4.0",
+    "ruff>=0.8.0",
+    "basedpyright>=1.22.0",
+    "pyinstaller>=6.11.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chat_backup"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["reference", "history", "backups", "build", "dist", ".venv", ".git", ".git-docs"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+extend-exclude = ["reference", "history", "build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.basedpyright]
+include = ["src", "tests", "packaging"]
+exclude = ["reference", "history", "build", "dist", ".venv"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
