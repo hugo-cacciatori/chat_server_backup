@@ -935,4 +935,21 @@ mod tests {
             orig_sha_before
         );
     }
+
+    #[test]
+    fn test_export_bot_security_and_upgraded_features() {
+        let bot_path = repo_root().join("bot").join("export_bot.py");
+        assert!(bot_path.is_file(), "bot/export_bot.py must exist");
+        let code = fs::read_to_string(&bot_path).unwrap();
+
+        // Must read token from CHAT_BACKUP_BOT_TOKEN and never hardcode the prototype token
+        assert!(code.contains("CHAT_BACKUP_BOT_TOKEN"));
+        assert!(!code.contains("MTU0NDEwODY2Njk0MzE3NjcxNQ"));
+
+        // Must support archived threads, chronological history, and native JSON embed dicts
+        assert!(code.contains("archived_threads"));
+        assert!(code.contains("oldest_first=True"));
+        assert!(code.contains("[e.to_dict() for e in message.embeds]"));
+        assert!(!code.contains("str(e.to_dict())"));
+    }
 }
