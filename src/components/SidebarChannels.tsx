@@ -1,14 +1,16 @@
 import { useState } from "react";
 import {
   Archive,
-  CopyPlus,
   FolderCog,
   Hash,
   LayoutList,
   Lock,
   PencilLine,
+  RotateCcw,
+  Save,
   Search,
   Server,
+  Trash2,
   UserCircle2,
 } from "lucide-react";
 import type { BackupDescriptor, Channel, ServerBackup } from "../types/backup";
@@ -20,11 +22,15 @@ interface SidebarChannelsProps {
   selectedChannelId: string;
   backupRootPath: string;
   localAuthorName: string;
+  hasUnsavedChanges: boolean;
+  hasEditedBackupForDate: boolean;
   onSelectBackup: (jsonPath: string) => void;
   onSelectChannel: (channelId: string) => void;
   onOpenGlobalSearch: () => void;
   onChangeBackupRoot: (newRoot: string) => void;
-  onSaveAsNewRevision?: () => Promise<void> | void;
+  onSaveChanges?: () => Promise<void> | void;
+  onDiscardChanges?: () => void;
+  onDeleteEditedBackup?: () => Promise<void> | void;
   onChangeLocalAuthor?: (authorName: string) => Promise<void> | void;
 }
 
@@ -35,11 +41,15 @@ export function SidebarChannels({
   selectedChannelId,
   backupRootPath,
   localAuthorName,
+  hasUnsavedChanges,
+  hasEditedBackupForDate,
   onSelectBackup,
   onSelectChannel,
   onOpenGlobalSearch,
   onChangeBackupRoot,
-  onSaveAsNewRevision,
+  onSaveChanges,
+  onDiscardChanges,
+  onDeleteEditedBackup,
   onChangeLocalAuthor,
 }: SidebarChannelsProps) {
   const [editingRoot, setEditingRoot] = useState(false);
@@ -124,14 +134,19 @@ export function SidebarChannels({
           </button>
         </div>
 
-        {/* Status Badge: Original vs Edited */}
+        {/* Status Badge & Explicit Save / Delete Edited Backup Controls */}
         {currentBackup && (
           <div className="mt-2.5 space-y-1.5">
             <div className="flex items-center gap-1.5">
-              {currentBackup.is_edited ? (
-                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-300 ring-1 ring-amber-500/30">
+              {hasUnsavedChanges ? (
+                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-amber-500/20 px-2.5 py-1 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-400/40">
+                  <PencilLine className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                  <span className="truncate">Unsaved Changes (Not Saved Yet)</span>
+                </span>
+              ) : currentBackup.is_edited ? (
+                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-indigo-500/15 px-2.5 py-1 text-[11px] font-medium text-indigo-300 ring-1 ring-indigo-500/30">
                   <PencilLine className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Edited Snapshot</span>
+                  <span className="truncate">Edited Backup</span>
                 </span>
               ) : (
                 <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30">
@@ -141,15 +156,40 @@ export function SidebarChannels({
               )}
             </div>
 
-            {onSaveAsNewRevision && (
+            {hasUnsavedChanges && onSaveChanges && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onSaveChanges()}
+                  title="Save changes to the Edited backup (Ctrl+S)"
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-indigo-500 transition-colors cursor-pointer"
+                >
+                  <Save className="h-3.5 w-3.5" />
+                  <span>Save (Ctrl+S)</span>
+                </button>
+                {onDiscardChanges && (
+                  <button
+                    type="button"
+                    onClick={onDiscardChanges}
+                    title="Discard unsaved session changes"
+                    className="flex items-center justify-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1.5 text-[11px] font-medium text-slate-300 hover:border-slate-700 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    <span>Discard</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {hasEditedBackupForDate && onDeleteEditedBackup && (
               <button
                 type="button"
-                onClick={() => onSaveAsNewRevision()}
-                title="Save current snapshot as a timestamped revision (*_edited_YYYY-MM-DD_HHMMSS.json)"
-                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-800 bg-slate-900/90 px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:border-indigo-500/40 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+                onClick={() => onDeleteEditedBackup()}
+                title="Delete the saved Edited backup for this date and return to Original"
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-300 hover:border-rose-500/50 hover:bg-rose-500/20 hover:text-rose-200 transition-colors cursor-pointer"
               >
-                <CopyPlus className="h-3.5 w-3.5 text-indigo-400" />
-                <span>Save As New Revision</span>
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>Delete Edited Backup</span>
               </button>
             )}
           </div>

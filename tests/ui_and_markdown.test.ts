@@ -8,6 +8,12 @@ import {
   formatByteSize,
   formatDurationSeconds,
 } from "../src/components/MediaCards";
+import {
+  addMessageInMemory,
+  createPostInMemory,
+  deleteMessageInMemory,
+  editMessageInMemory,
+} from "../src/lib/editing";
 import type { ServerBackup } from "../src/types/backup";
 
 const sampleBackup: ServerBackup = {
@@ -192,5 +198,61 @@ describe("Media & Document Formatting Helpers", () => {
     expect(formatByteSize(5 * 1024 * 1024)).toBe("5.00 MB");
     expect(formatDurationSeconds(0)).toBe("0:00");
     expect(formatDurationSeconds(125)).toBe("2:05");
+  });
+});
+
+describe("In-Memory Session Editing (Unsaved Until Explicit Save)", () => {
+  it("keeps new posts, messages, edits, and deletions in memory without turning Original into Edited prematurely", () => {
+    const channelId = "1542028566022201344";
+    const { backup: afterPost, createdPostId } = createPostInMemory(
+      sampleBackup,
+      channelId,
+      "test",
+      "Hugo",
+      "Starter body",
+      ["tag_docs"],
+      [],
+    );
+    expect(afterPost.is_edited).toBe(false);
+    expect(afterPost.source_path).toBe(sampleBackup.source_path);
+    expect(afterPost.channels[0].posts).toHaveLength(3);
+
+    const { backup: afterMsg, createdMessageId } = addMessageInMemory(
+      afterPost,
+      channelId,
+      createdPostId,
+      "Hugo",
+      "Follow-up message",
+      [],
+      null,
+    );
+    const createdPost = afterMsg.channels[0].posts.find(
+      (p) => p.id === createdPostId,
+    )!;
+    expect(createdPost.messages).toHaveLength(2);
+
+    const { backup: afterEdit } = editMessageInMemory(
+      afterMsg,
+      channelId,
+      createdPostId,
+      createdMessageId,
+      "Follow-up message (edited)",
+      [],
+    );
+    const editedMsg = afterEdit.channels[0].posts
+      .find((p) => p.id === createdPostId)!
+      .messages.find((m) => m.id === createdMessageId)!;
+    expect(editedMsg.content).toBe("Follow-up message (edited)");
+
+    const { backup: afterDelete } = deleteMessageInMemory(
+      afterEdit,
+      channelId,
+      createdPostId,
+      createdMessageId,
+    );
+    expect(
+      afterDelete.channels[0].posts.find((p) => p.id === createdPostId)!
+        .messages,
+    ).toHaveLength(1);
   });
 });

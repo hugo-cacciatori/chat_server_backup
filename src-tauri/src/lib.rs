@@ -12,7 +12,10 @@ use loader::{discover_backups, load_backup};
 use model::{Author, BackupDescriptor, ServerBackup};
 use previews::{inspect_attachment_file, AttachmentInspection};
 use serde::{Deserialize, Serialize};
-use storage::{add_message, create_post, delete_message, edit_message, save_edited_backup};
+use storage::{
+    add_message, create_post, delete_edited_backup, delete_message, edit_message,
+    save_edited_backup, save_session_backup,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupMutationResult {
@@ -351,6 +354,30 @@ fn save_backup_revision(json_path: String) -> Result<BackupMutationResult, Strin
 }
 
 #[tauri::command]
+fn save_backup_changes(backup: ServerBackup) -> Result<BackupMutationResult, String> {
+    let saved = save_session_backup(backup).map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&saved, true)?;
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: saved.to_string_lossy().to_string(),
+        active_post_id: None,
+        active_message_id: None,
+    })
+}
+
+#[tauri::command]
+fn delete_edited_backup_command(json_path: String) -> Result<BackupMutationResult, String> {
+    let orig_path = delete_edited_backup(Path::new(&json_path)).map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&orig_path, true)?;
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: orig_path.to_string_lossy().to_string(),
+        active_post_id: None,
+        active_message_id: None,
+    })
+}
+
+#[tauri::command]
 fn open_path_in_os(path: String, reveal_in_folder: bool) -> Result<(), String> {
     let target = Path::new(&path);
     if !target.exists() {
@@ -398,6 +425,8 @@ pub fn run() {
             delete_local_message,
             create_local_post,
             save_backup_revision,
+            save_backup_changes,
+            delete_edited_backup_command,
             open_path_in_os,
             open_external_url
         ])
@@ -460,7 +489,6 @@ mod tests {
         collect_files(&root.join("src"), &mut files);
         collect_files(&root.join("src-tauri").join("src"), &mut files);
         collect_files(&root.join("tests"), &mut files);
-        files.push(root.join("README.md"));
         files.push(root.join("package.json"));
         files.push(root.join("src-tauri").join("Cargo.toml"));
         files.push(root.join("src-tauri").join("tauri.conf.json"));
@@ -814,8 +842,78 @@ mod tests {
             vec![
                 "2026-10-20 (Original)",
                 "2026-10-20 (Edited)",
-                "2026-10-20 (Edited 2026-10-24_151000)"
             ]
+        );
+    }
+
+    #[test]
+    fn test_explicit_save_merge_from_original_and_delete_edited() {
+        let tmp = TempDir::new().unwrap();
+        let history_dir = create_sample_history(tmp.path());
+        let orig_json = history_dir
+            .join("2026-10-20")
+            .join("server_export_2026-10-20.json");
+        let orig_sha_before = sha256_bytes(&fs::read(&orig_json).unwrap());
+
+        let author = Author {
+            id: "u_local".to_string(),
+            name: "local_editor".to_string(),
+            bot: false,
+        };
+
+        // Session 1: Load Original, create Post 1 ("test") in memory, then explicitly Save
+        let mut session1 = load_backup(&orig_json, true).unwrap();
+        let post1 = create_post(
+            &mut session1,
+            "ch_forum_1",
+            "test",
+            author.clone(),
+            "First test post body",
+            &["tag_docs".to_string()],
+            &[],
+        )
+        .unwrap();
+
+        let saved1 = save_backup_changes(session1).unwrap();
+        assert!(saved1.backup.is_edited);
+        assert!(saved1.saved_path.ends_with("server_export_2026-10-20_edited.json"));
+        assert!(saved1.backup.channels[0]
+            .posts
+            .iter()
+            .any(|p| p.id == post1.id && p.name == "test"));
+
+        // Session 2: Switch back to Original, create Post 2 ("test 2") in memory, then explicitly Save
+        let mut session2_from_orig = load_backup(&orig_json, true).unwrap();
+        assert!(!session2_from_orig.is_edited);
+        let post2 = create_post(
+            &mut session2_from_orig,
+            "ch_forum_1",
+            "test 2",
+            author,
+            "Second test post body",
+            &[],
+            &[],
+        )
+        .unwrap();
+
+        let saved2 = save_backup_changes(session2_from_orig).unwrap();
+        assert!(saved2.backup.is_edited);
+        // Both "test" and "test 2" must exist in Edited (Post 1 is NOT overwritten!)
+        let edited_posts = &saved2.backup.channels[0].posts;
+        assert!(edited_posts.iter().any(|p| p.id == post1.id && p.name == "test"));
+        assert!(edited_posts.iter().any(|p| p.id == post2.id && p.name == "test 2"));
+
+        // Delete Edited Backup: removes *_edited.json and returns Original
+        let del_res = delete_edited_backup_command(saved2.saved_path.clone()).unwrap();
+        assert!(!del_res.backup.is_edited);
+        assert!(!Path::new(&saved2.saved_path).exists());
+        let discovered_after = discover_backups(&history_dir);
+        assert_eq!(discovered_after.len(), 1);
+        assert_eq!(discovered_after[0].display_label, "2026-10-20 (Original)");
+
+        assert_eq!(
+            sha256_bytes(&fs::read(&orig_json).unwrap()),
+            orig_sha_before
         );
     }
 

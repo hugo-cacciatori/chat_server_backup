@@ -110,17 +110,14 @@ pub fn discover_backups(history_dir: &Path) -> Vec<BackupDescriptor> {
             let base = base_export_stem(&ed);
             let stem = ed.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let suffix = &stem[base.len()..];
-            let label = if suffix == EDITED_MARKER {
-                format!("{date_label} (Edited)")
-            } else {
-                let rev = suffix.strip_prefix(&format!("{EDITED_MARKER}_")).unwrap_or(suffix);
-                format!("{date_label} (Edited {rev})")
-            };
+            if suffix != EDITED_MARKER {
+                continue;
+            }
             descriptors.push(BackupDescriptor {
                 date_label: date_label.clone(),
                 json_path: ed.to_string_lossy().to_string(),
                 is_edited: true,
-                display_label: label,
+                display_label: format!("{date_label} (Edited)"),
                 based_on_filename: format!("{base}.json"),
             });
         }

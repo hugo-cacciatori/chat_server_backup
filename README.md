@@ -17,7 +17,8 @@ ChatServerBackup lets you keep a complete, offline copy of your Discord server�
    - Pick a backup date from the top bar, click through channels, filter forum posts by tags, use global search (`Ctrl+K`), follow internal jump links across channels/threads, and view images, audio, video, PDFs, Office docs (`.docx`), code files, and archives (`.zip`/`.7z`) directly inside the app.
 3. **Edit or add to your archive safely (non-destructive):**
    - You can post new messages, create new forum threads, attach local files from your PC, or edit/delete existing messages inside the desktop app to keep taking notes or organizing your archive offline.
-   - Your original Discord export is **never modified**—every local change is automatically saved to a separate `server_export_<date>_edited.json` file (or a timestamped revision when using **Save Revision**), and you can switch back and forth between the `Original` and `Edited` snapshots at any time.
+   - Changes stay in memory during your session until you explicitly click **Save** or press **`Ctrl+S`** (closing the app without saving discards unsaved changes).
+   - Your original Discord export is **never modified**—when you save (`Ctrl+S`), changes are written to a single `server_export_<date>_edited.json` file alongside the original. You can switch between `Original` and `Edited`, save additional changes into `Edited`, or click **Delete Edited Backup** at any time.
 
 ## Features
 - **Tailored for Discord server structures:** Full support for Discord categories, text channels, forum channels, forum tag filtering (`ANY` / `ALL`), active & archived threads, replies, and rich embeds.

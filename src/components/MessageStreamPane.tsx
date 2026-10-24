@@ -25,6 +25,8 @@ interface MessageStreamPaneProps {
   canGoForward: boolean;
   highlightedMessageId: string | null;
   localAuthorName: string;
+  hasUnsavedChanges?: boolean;
+  onSaveChanges?: () => Promise<void> | void;
   onChangeMessageQuery: (query: string) => void;
   onToggleOldestFirst: () => void;
   onGoBack: () => void;
@@ -70,6 +72,8 @@ export function MessageStreamPane({
   canGoForward,
   highlightedMessageId,
   localAuthorName,
+  hasUnsavedChanges = false,
+  onSaveChanges,
   onChangeMessageQuery,
   onToggleOldestFirst,
   onGoBack,
@@ -232,8 +236,19 @@ export function MessageStreamPane({
           </div>
         </div>
 
-        {/* Right Toolbar: Order Toggle + In-Post Search */}
+        {/* Right Toolbar: Unsaved Save Button + Order Toggle + In-Post Search */}
         <div className="flex shrink-0 items-center gap-2">
+          {hasUnsavedChanges && onSaveChanges && (
+            <button
+              type="button"
+              onClick={() => onSaveChanges()}
+              title="Save unsaved changes to Edited backup (Ctrl+S)"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow-sm hover:bg-amber-400 cursor-pointer"
+            >
+              <span>Save Changes (Ctrl+S)</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onToggleOldestFirst}
@@ -422,7 +437,7 @@ export function MessageStreamPane({
               }
             }}
             rows={1}
-            placeholder={`Post in "${post.name}" as ${localAuthorName || "Local User"}… (Saves to *_edited.json)`}
+            placeholder={`Post in "${post.name}" as ${localAuthorName || "Local User"}… (Press Ctrl+S or Save to persist)`}
             className="max-h-32 min-h-[36px] flex-1 resize-y rounded-xl border border-slate-800 bg-slate-900/90 px-3.5 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
           />
 

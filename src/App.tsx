@@ -9,6 +9,12 @@ import {
   resolveTargetInBackup,
   type InternalServerTarget,
 } from "./lib/links";
+import {
+  addMessageInMemory,
+  createPostInMemory,
+  deleteMessageInMemory,
+  editMessageInMemory,
+} from "./lib/editing";
 import { SidebarChannels } from "./components/SidebarChannels";
 import {
   PostListPane,
@@ -38,6 +44,7 @@ export function App() {
   const [localAuthorName, setLocalAuthorName] = useState<string>("Local User");
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
 
   const [selectedChannelId, setSelectedChannelId] = useState<string>("");
   const [selectedPostId, setSelectedPostId] = useState<string>("");
@@ -94,6 +101,7 @@ export function App() {
   const loadSnapshot = useCallback((jsonPath: string) => {
     if (!jsonPath) return;
     setSelectedBackupPath(jsonPath);
+    setHasUnsavedChanges(false);
     invoke<ServerBackup>("load_backup_command", {
       jsonPath,
       sortChronological: true,
@@ -302,8 +310,21 @@ export function App() {
     async (res: BackupMutationResult) => {
       setCurrentBackup(res.backup);
       setSelectedBackupPath(res.saved_path);
+      setHasUnsavedChanges(false);
       if (res.active_post_id) {
         setSelectedPostId(res.active_post_id);
+      } else {
+        const ch =
+          res.backup.channels.find((c) => c.id === selectedChannelId) ??
+          res.backup.channels[0] ??
+          null;
+        if (ch) {
+          setSelectedChannelId(ch.id);
+          const stillHasPost = ch.posts.some((p) => p.id === selectedPostId);
+          if (!stillHasPost) {
+            setSelectedPostId(ch.posts[0]?.id ?? "");
+          }
+        }
       }
       if (res.active_message_id) {
         setHighlightedMessageId(res.active_message_id);
@@ -320,7 +341,7 @@ export function App() {
         console.error("Failed to refresh backups list:", err);
       }
     },
-    [backupRootPath],
+    [backupRootPath, selectedChannelId, selectedPostId],
   );
 
   const handleChangeLocalAuthor = async (authorName: string) => {
@@ -335,100 +356,133 @@ export function App() {
     }
   };
 
-  const handleSendMessage = async (
+  const handleSendMessage = (
     content: string,
     attachmentPaths: string[],
     replyToId: string | null,
   ) => {
-    if (!selectedBackupPath || !selectedChannelId || !selectedPostId) return;
-    try {
-      const res = await invoke<BackupMutationResult>("create_local_message", {
-        jsonPath: selectedBackupPath,
-        channelId: selectedChannelId,
-        postId: selectedPostId,
-        content,
-        attachmentPaths,
-        replyToId,
-        newRevision: false,
-      });
-      await applyMutationResult(res);
-    } catch (err) {
-      console.error("Failed to send local message:", err);
-    }
+    if (!currentBackup || !selectedChannelId || !selectedPostId) return;
+    const { backup: updated, createdMessageId } = addMessageInMemory(
+      currentBackup,
+      selectedChannelId,
+      selectedPostId,
+      localAuthorName,
+      content,
+      attachmentPaths,
+      replyToId,
+    );
+    setCurrentBackup(updated);
+    setHasUnsavedChanges(true);
+    setHighlightedMessageId(createdMessageId);
   };
 
-  const handleEditMessage = async (
+  const handleEditMessage = (
     messageId: string,
     newContent: string,
     newAttachmentPaths: string[],
   ) => {
-    if (!selectedBackupPath || !selectedChannelId || !selectedPostId) return;
-    try {
-      const res = await invoke<BackupMutationResult>("edit_local_message", {
-        jsonPath: selectedBackupPath,
-        channelId: selectedChannelId,
-        postId: selectedPostId,
-        messageId,
-        newContent,
-        newAttachmentPaths,
-        newRevision: false,
-      });
-      await applyMutationResult(res);
-    } catch (err) {
-      console.error("Failed to edit local message:", err);
-    }
+    if (!currentBackup || !selectedChannelId || !selectedPostId) return;
+    const { backup: updated } = editMessageInMemory(
+      currentBackup,
+      selectedChannelId,
+      selectedPostId,
+      messageId,
+      newContent,
+      newAttachmentPaths,
+    );
+    setCurrentBackup(updated);
+    setHasUnsavedChanges(true);
+    setHighlightedMessageId(messageId);
   };
 
-  const handleDeleteMessage = async (messageId: string) => {
-    if (!selectedBackupPath || !selectedChannelId || !selectedPostId) return;
-    try {
-      const res = await invoke<BackupMutationResult>("delete_local_message", {
-        jsonPath: selectedBackupPath,
-        channelId: selectedChannelId,
-        postId: selectedPostId,
-        messageId,
-        newRevision: false,
-      });
-      await applyMutationResult(res);
-    } catch (err) {
-      console.error("Failed to delete local message:", err);
-    }
+  const handleDeleteMessage = (messageId: string) => {
+    if (!currentBackup || !selectedChannelId || !selectedPostId) return;
+    const { backup: updated } = deleteMessageInMemory(
+      currentBackup,
+      selectedChannelId,
+      selectedPostId,
+      messageId,
+    );
+    setCurrentBackup(updated);
+    setHasUnsavedChanges(true);
   };
 
-  const handleCreatePost = async (
+  const handleCreatePost = (
     title: string,
     initialContent: string,
     tagIds: string[],
     attachmentPaths: string[],
   ) => {
-    if (!selectedBackupPath || !selectedChannelId) return;
-    try {
-      const res = await invoke<BackupMutationResult>("create_local_post", {
-        jsonPath: selectedBackupPath,
-        channelId: selectedChannelId,
+    if (!currentBackup || !selectedChannelId) return;
+    const { backup: updated, createdPostId, createdMessageId } =
+      createPostInMemory(
+        currentBackup,
+        selectedChannelId,
         title,
+        localAuthorName,
         initialContent,
         tagIds,
         attachmentPaths,
-        newRevision: false,
-      });
-      await applyMutationResult(res);
-    } catch (err) {
-      console.error("Failed to create local post:", err);
-    }
+      );
+    setCurrentBackup(updated);
+    setHasUnsavedChanges(true);
+    setSelectedPostId(createdPostId);
+    setHighlightedMessageId(createdMessageId);
   };
 
-  const handleSaveAsNewRevision = async () => {
-    if (!selectedBackupPath) return;
+  const handleSaveChanges = useCallback(async () => {
+    if (!currentBackup || !hasUnsavedChanges) return;
     try {
-      const res = await invoke<BackupMutationResult>("save_backup_revision", {
-        jsonPath: selectedBackupPath,
+      const res = await invoke<BackupMutationResult>("save_backup_changes", {
+        backup: currentBackup,
       });
       await applyMutationResult(res);
     } catch (err) {
-      console.error("Failed to save backup revision:", err);
+      console.error("Failed to save backup changes:", err);
     }
-  };
+  }, [currentBackup, hasUnsavedChanges, applyMutationResult]);
+
+  const handleDiscardChanges = useCallback(() => {
+    if (!selectedBackupPath) return;
+    loadSnapshot(selectedBackupPath);
+  }, [selectedBackupPath, loadSnapshot]);
+
+  const handleDeleteEditedBackup = useCallback(async () => {
+    if (!selectedBackupPath) return;
+    try {
+      const res = await invoke<BackupMutationResult>(
+        "delete_edited_backup_command",
+        {
+          jsonPath: selectedBackupPath,
+        },
+      );
+      await applyMutationResult(res);
+    } catch (err) {
+      console.error("Failed to delete edited backup:", err);
+    }
+  }, [selectedBackupPath, applyMutationResult]);
+
+  const hasEditedBackupForDate = useMemo(() => {
+    if (!currentBackup) return false;
+    return (
+      currentBackup.is_edited ||
+      backups.some(
+        (b) => b.date_label === currentBackup.date_label && b.is_edited,
+      )
+    );
+  }, [currentBackup, backups]);
+
+  // Global keyboard shortcut: Ctrl+S (Save Changes)
+  useEffect(() => {
+    const handleSaveKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void handleSaveChanges();
+      }
+    };
+    window.addEventListener("keydown", handleSaveKey);
+    return () => window.removeEventListener("keydown", handleSaveKey);
+  }, [handleSaveChanges]);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
@@ -440,11 +494,15 @@ export function App() {
         selectedChannelId={selectedChannelId}
         backupRootPath={backupRootPath}
         localAuthorName={localAuthorName}
+        hasUnsavedChanges={hasUnsavedChanges}
+        hasEditedBackupForDate={hasEditedBackupForDate}
         onSelectBackup={loadSnapshot}
         onSelectChannel={handleSelectChannel}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
         onChangeBackupRoot={handleChangeBackupRoot}
-        onSaveAsNewRevision={handleSaveAsNewRevision}
+        onSaveChanges={handleSaveChanges}
+        onDiscardChanges={handleDiscardChanges}
+        onDeleteEditedBackup={handleDeleteEditedBackup}
         onChangeLocalAuthor={handleChangeLocalAuthor}
       />
 
@@ -476,6 +534,8 @@ export function App() {
         canGoForward={historyIndex >= 0 && historyIndex < history.length - 1}
         highlightedMessageId={highlightedMessageId}
         localAuthorName={localAuthorName}
+        hasUnsavedChanges={hasUnsavedChanges}
+        onSaveChanges={handleSaveChanges}
         onChangeMessageQuery={setMessageQuery}
         onToggleOldestFirst={() => setOldestFirst((v) => !v)}
         onGoBack={() => {
