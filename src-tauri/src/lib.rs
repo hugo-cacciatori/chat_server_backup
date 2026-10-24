@@ -15,13 +15,10 @@ use std::thread;
 use std::os::windows::process::CommandExt;
 
 use loader::{discover_backups, load_backup};
-use model::{Author, BackupDescriptor, ServerBackup};
+use model::{BackupDescriptor, ServerBackup};
 use previews::{inspect_attachment_file, AttachmentInspection};
 use serde::{Deserialize, Serialize};
-use storage::{
-    add_message, create_post, delete_edited_backup, delete_message, edit_message,
-    save_edited_backup, save_session_backup,
-};
+use storage::{delete_edited_backup, save_session_backup};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupMutationResult {
@@ -29,23 +26,6 @@ pub struct BackupMutationResult {
     pub saved_path: String,
     pub active_post_id: Option<String>,
     pub active_message_id: Option<String>,
-}
-
-fn current_local_author() -> Author {
-    let cfg = load_app_settings_from(&settings_file_path());
-    Author {
-        id: if cfg.local_author_id.trim().is_empty() {
-            default_author_id()
-        } else {
-            cfg.local_author_id
-        },
-        name: if cfg.local_author_name.trim().is_empty() {
-            default_author_name()
-        } else {
-            cfg.local_author_name
-        },
-        bot: false,
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,25 +148,6 @@ pub fn apply_bot_output_line(status: &mut BotRuntimeStatus, raw_line: &str) {
     }
 }
 
-fn read_token_from_env_file(env_path: &Path) -> Option<String> {
-    let content = fs::read_to_string(env_path).ok()?;
-    for raw_line in content.lines() {
-        let line = raw_line.trim();
-        if line.is_empty() || line.starts_with('#') || !line.contains('=') {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once('=') {
-            if k.trim() == "CHAT_BACKUP_BOT_TOKEN" {
-                let cleaned = v.trim().trim_matches('\'').trim_matches('"').trim();
-                if !cleaned.is_empty() {
-                    return Some(cleaned.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 pub fn resolve_effective_bot_token(cfg: &AppSettings) -> String {
     if !cfg.bot_token.trim().is_empty() {
         return cfg.bot_token.trim().to_string();
@@ -196,72 +157,19 @@ pub fn resolve_effective_bot_token(cfg: &AppSettings) -> String {
             return env_tok.trim().to_string();
         }
     }
-    let mut env_candidates = Vec::new();
-    if !cfg.backup_root.trim().is_empty() {
-        let root_path = Path::new(cfg.backup_root.trim());
-        env_candidates.push(root_path.join(".env"));
-        if let Some(parent) = root_path.parent() {
-            env_candidates.push(parent.join(".env"));
-        }
-    }
-    if let Ok(exe) = env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            env_candidates.push(dir.join(".env"));
-        }
-    }
-    if let Ok(cwd) = env::current_dir() {
-        env_candidates.push(cwd.join(".env"));
-    }
-    for candidate in env_candidates {
-        if let Some(tok) = read_token_from_env_file(&candidate) {
-            return tok;
-        }
-    }
     String::new()
 }
 
-fn resolve_or_extract_bot_script(backup_root: &str) -> Result<PathBuf, String> {
-    let mut candidates = Vec::new();
-    if !backup_root.trim().is_empty() {
-        let root_path = Path::new(backup_root.trim());
-        if let Some(parent) = root_path.parent() {
-            candidates.push(parent.join("export_bot.py"));
-            candidates.push(parent.join("bot").join("export_bot.py"));
-        }
-    }
-    if let Ok(exe) = env::current_exe() {
-        let mut cur = exe.parent();
-        while let Some(dir) = cur {
-            candidates.push(dir.join("export_bot.py"));
-            candidates.push(dir.join("bot").join("export_bot.py"));
-            cur = dir.parent();
-        }
-    }
-    if let Ok(cwd) = env::current_dir() {
-        let mut cur = Some(cwd.as_path());
-        while let Some(dir) = cur {
-            candidates.push(dir.join("bot").join("export_bot.py"));
-            candidates.push(dir.join("export_bot.py"));
-            cur = dir.parent();
-        }
-    }
-
-    for candidate in candidates {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    // Fallback: materialize the embedded export_bot.py next to settings.json
-    let fallback_path = settings_file_path()
+fn materialize_embedded_bot_script() -> Result<PathBuf, String> {
+    let script_path = settings_file_path()
         .parent()
         .map(|p| p.join("export_bot.py"))
         .unwrap_or_else(|| PathBuf::from("export_bot.py"));
-    if let Some(parent) = fallback_path.parent() {
+    if let Some(parent) = script_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(&fallback_path, EMBEDDED_EXPORT_BOT_PY).map_err(|e| e.to_string())?;
-    Ok(fallback_path)
+    fs::write(&script_path, EMBEDDED_EXPORT_BOT_PY).map_err(|e| e.to_string())?;
+    Ok(script_path)
 }
 
 pub fn push_recent_backup_root(cfg: &mut AppSettings, new_root: &str) {
@@ -309,10 +217,6 @@ pub fn default_history_dir() -> PathBuf {
             if direct.is_dir() {
                 return direct;
             }
-            let dev_ref = dir.join("reference").join("history");
-            if dev_ref.is_dir() {
-                return dev_ref;
-            }
             cur = dir.parent();
         }
     }
@@ -322,10 +226,6 @@ pub fn default_history_dir() -> PathBuf {
             let direct = dir.join("history");
             if direct.is_dir() {
                 return direct;
-            }
-            let dev_ref = dir.join("reference").join("history");
-            if dev_ref.is_dir() {
-                return dev_ref;
             }
             cur = dir.parent();
         }
@@ -403,7 +303,7 @@ fn start_export_bot() -> Result<BotRuntimeStatus, String> {
     } else {
         PathBuf::from(cfg.backup_root.trim())
     };
-    let script_path = resolve_or_extract_bot_script(&cfg.backup_root)?;
+    let script_path = materialize_embedded_bot_script()?;
 
     let mut guard = bot_manager().lock().unwrap();
     if let Some(mut prev_child) = guard.child.take() {
@@ -623,162 +523,6 @@ fn set_local_author_profile(author_name: String, author_id: Option<String>) -> R
 }
 
 #[tauri::command]
-fn create_local_message(
-    json_path: String,
-    channel_id: String,
-    post_id: String,
-    content: String,
-    attachment_paths: Vec<String>,
-    reply_to_id: Option<String>,
-    new_revision: bool,
-) -> Result<BackupMutationResult, String> {
-    let mut backup = load_backup(Path::new(&json_path), true)?;
-    let author = current_local_author();
-    let att_files: Vec<PathBuf> = attachment_paths
-        .into_iter()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .collect();
-
-    let created = add_message(
-        &mut backup,
-        &channel_id,
-        &post_id,
-        author,
-        &content,
-        &att_files,
-        reply_to_id,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let saved = save_edited_backup(&mut backup, None, new_revision, None)
-        .map_err(|e| e.to_string())?;
-    let reloaded = load_backup(&saved, true)?;
-    Ok(BackupMutationResult {
-        backup: reloaded,
-        saved_path: saved.to_string_lossy().to_string(),
-        active_post_id: Some(post_id),
-        active_message_id: Some(created.id),
-    })
-}
-
-#[tauri::command]
-fn edit_local_message(
-    json_path: String,
-    channel_id: String,
-    post_id: String,
-    message_id: String,
-    new_content: String,
-    new_attachment_paths: Vec<String>,
-    new_revision: bool,
-) -> Result<BackupMutationResult, String> {
-    let mut backup = load_backup(Path::new(&json_path), true)?;
-    let att_files: Vec<PathBuf> = new_attachment_paths
-        .into_iter()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .collect();
-
-    let updated = edit_message(
-        &mut backup,
-        &channel_id,
-        &post_id,
-        &message_id,
-        &new_content,
-        &att_files,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let saved = save_edited_backup(&mut backup, None, new_revision, None)
-        .map_err(|e| e.to_string())?;
-    let reloaded = load_backup(&saved, true)?;
-    Ok(BackupMutationResult {
-        backup: reloaded,
-        saved_path: saved.to_string_lossy().to_string(),
-        active_post_id: Some(post_id),
-        active_message_id: Some(updated.id),
-    })
-}
-
-#[tauri::command]
-fn delete_local_message(
-    json_path: String,
-    channel_id: String,
-    post_id: String,
-    message_id: String,
-    new_revision: bool,
-) -> Result<BackupMutationResult, String> {
-    let mut backup = load_backup(Path::new(&json_path), true)?;
-    delete_message(&mut backup, &channel_id, &post_id, &message_id)
-        .map_err(|e| e.to_string())?;
-
-    let saved = save_edited_backup(&mut backup, None, new_revision, None)
-        .map_err(|e| e.to_string())?;
-    let reloaded = load_backup(&saved, true)?;
-    Ok(BackupMutationResult {
-        backup: reloaded,
-        saved_path: saved.to_string_lossy().to_string(),
-        active_post_id: Some(post_id),
-        active_message_id: None,
-    })
-}
-
-#[tauri::command]
-fn create_local_post(
-    json_path: String,
-    channel_id: String,
-    title: String,
-    initial_content: String,
-    tag_ids: Vec<String>,
-    attachment_paths: Vec<String>,
-    new_revision: bool,
-) -> Result<BackupMutationResult, String> {
-    let mut backup = load_backup(Path::new(&json_path), true)?;
-    let author = current_local_author();
-    let att_files: Vec<PathBuf> = attachment_paths
-        .into_iter()
-        .filter(|s| !s.trim().is_empty())
-        .map(PathBuf::from)
-        .collect();
-
-    let created = create_post(
-        &mut backup,
-        &channel_id,
-        &title,
-        author,
-        &initial_content,
-        &tag_ids,
-        &att_files,
-    )
-    .map_err(|e| e.to_string())?;
-
-    let saved = save_edited_backup(&mut backup, None, new_revision, None)
-        .map_err(|e| e.to_string())?;
-    let reloaded = load_backup(&saved, true)?;
-    let first_msg_id = created.messages.first().map(|m| m.id.clone());
-    Ok(BackupMutationResult {
-        backup: reloaded,
-        saved_path: saved.to_string_lossy().to_string(),
-        active_post_id: Some(created.id),
-        active_message_id: first_msg_id,
-    })
-}
-
-#[tauri::command]
-fn save_backup_revision(json_path: String) -> Result<BackupMutationResult, String> {
-    let mut backup = load_backup(Path::new(&json_path), true)?;
-    let saved = save_edited_backup(&mut backup, None, true, None)
-        .map_err(|e| e.to_string())?;
-    let reloaded = load_backup(&saved, true)?;
-    Ok(BackupMutationResult {
-        backup: reloaded,
-        saved_path: saved.to_string_lossy().to_string(),
-        active_post_id: None,
-        active_message_id: None,
-    })
-}
-
-#[tauri::command]
 fn save_backup_changes(backup: ServerBackup) -> Result<BackupMutationResult, String> {
     let saved = save_session_backup(backup).map_err(|e| e.to_string())?;
     let reloaded = load_backup(&saved, true)?;
@@ -851,11 +595,6 @@ pub fn run() {
             list_discovered_backups,
             load_backup_command,
             inspect_attachment,
-            create_local_message,
-            edit_local_message,
-            delete_local_message,
-            create_local_post,
-            save_backup_revision,
             save_backup_changes,
             delete_edited_backup_command,
             open_path_in_os,
@@ -1121,32 +860,6 @@ mod tests {
         assert_eq!(fallback.description, "plain string note");
     }
 
-    #[test]
-    fn test_reference_backup_loads_if_present() {
-        let ref_json = repo_root()
-            .join("reference")
-            .join("history")
-            .join("2026-10-20")
-            .join("server_export_2026-10-20.json");
-        if !ref_json.is_file() {
-            return;
-        }
-
-        let backup = load_backup(&ref_json, true).unwrap();
-        assert_eq!(backup.id, "1175623460161065030");
-        assert!(!backup.channels.is_empty());
-        let forum = &backup.channels[0];
-        assert_eq!(forum.available_tags.len(), 8);
-        let all_atts: Vec<_> = forum
-            .posts
-            .iter()
-            .flat_map(|p| p.messages.iter())
-            .flat_map(|m| m.attachments.iter())
-            .collect();
-        assert!(all_atts.len() >= 38);
-        assert!(all_atts.iter().all(|a| a.exists));
-    }
-
     fn sha256_bytes(data: &[u8]) -> String {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -1233,23 +946,15 @@ mod tests {
         assert_eq!(created_post.messages.len(), 1);
         assert_eq!(created_post.applied_tags[0].id, "tag_docs");
 
-        let err = save_edited_backup(&mut backup, Some(&orig_json), false, None).unwrap_err();
+        let err = save_edited_backup(&mut backup, Some(&orig_json)).unwrap_err();
         assert!(matches!(err, StorageError::ImmutableBackup(_)));
 
-        let rolling_path = save_edited_backup(&mut backup, None, false, None).unwrap();
+        let rolling_path = save_edited_backup(&mut backup, None).unwrap();
         assert_eq!(
             rolling_path.file_name().unwrap().to_str().unwrap(),
             "server_export_2026-10-20_edited.json"
         );
         assert!(rolling_path.is_file());
-
-        let rev_path =
-            save_edited_backup(&mut backup, None, true, Some("2026-10-24_151000")).unwrap();
-        assert_eq!(
-            rev_path.file_name().unwrap().to_str().unwrap(),
-            "server_export_2026-10-20_edited_2026-10-24_151000.json"
-        );
-        assert!(rev_path.is_file());
 
         assert_eq!(
             sha256_bytes(&fs::read(&orig_json).unwrap()),
@@ -1405,7 +1110,8 @@ mod tests {
     }
 
     #[test]
-    fn test_inspect_attachments_and_reference_assets() {
+    fn test_inspect_attachments() {
+        use std::io::Write;
         let tmp = TempDir::new().unwrap();
         let py_file = tmp.path().join("example.py");
         fs::write(&py_file, "def add(a, b):\n    return a + b\n").unwrap();
@@ -1415,105 +1121,21 @@ mod tests {
         assert_eq!(tp.language, "python");
         assert_eq!(tp.total_lines, 2);
 
-        let assets_dir = repo_root()
-            .join("reference")
-            .join("history")
-            .join("2026-10-20")
-            .join("assets_2026-10-20");
-        if !assets_dir.is_dir() {
-            return;
+        // Verify .docx extraction on synthetic docx archive
+        let docx_file = tmp.path().join("sample.docx");
+        {
+            let file = fs::File::create(&docx_file).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("word/document.xml", options).unwrap();
+            zip.write_all(b"<w:document><w:body><w:p><w:r><w:t>Hello Docx</w:t></w:r></w:p></w:body></w:document>")
+                .unwrap();
+            zip.finish().unwrap();
         }
-
-        // Verify .docx extraction on real backup file
-        let docx_file =
-            assets_dir.join("1544167728271593492_1541951031477538958_LettreRecommandation1.docx");
-        if docx_file.is_file() {
-            let docx_info = inspect_attachment_file(&docx_file).unwrap();
-            assert_eq!(docx_info.kind, "docx");
-            let dp = docx_info.docx_preview.unwrap();
-            assert!(!dp.paragraphs.is_empty());
-        }
-
-        // Verify .7z archive listing on real backup file
-        let sevenz_file = assets_dir.join("1544167740594462770_1541951357186215988_docs1.7z");
-        if sevenz_file.is_file() {
-            let sz_info = inspect_attachment_file(&sevenz_file).unwrap();
-            assert_eq!(sz_info.kind, "archive");
-            let entries = sz_info.archive_entries.unwrap();
-            assert!(!entries.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_local_editing_commands_workflow() {
-        let tmp = TempDir::new().unwrap();
-        let history_dir = create_sample_history(tmp.path());
-        let orig_json = history_dir
-            .join("2026-10-20")
-            .join("server_export_2026-10-20.json");
-        let orig_sha_before = sha256_bytes(&fs::read(&orig_json).unwrap());
-
-        let msg_res = create_local_message(
-            orig_json.to_string_lossy().to_string(),
-            "ch_forum_1".to_string(),
-            "post_100".to_string(),
-            "Command-created message".to_string(),
-            vec![],
-            Some("2001".to_string()),
-            false,
-        )
-        .unwrap();
-        assert!(msg_res.backup.is_edited);
-        let new_msg_id = msg_res.active_message_id.unwrap();
-
-        let edit_res = edit_local_message(
-            msg_res.saved_path.clone(),
-            "ch_forum_1".to_string(),
-            "post_100".to_string(),
-            new_msg_id.clone(),
-            "Command-created message (updated)".to_string(),
-            vec![],
-            false,
-        )
-        .unwrap();
-        let edited_post = &edit_res.backup.channels[0].posts[0];
-        assert!(edited_post
-            .messages
-            .iter()
-            .any(|m| m.id == new_msg_id && m.content == "Command-created message (updated)"));
-
-        let del_res = delete_local_message(
-            edit_res.saved_path.clone(),
-            "ch_forum_1".to_string(),
-            "post_100".to_string(),
-            new_msg_id.clone(),
-            false,
-        )
-        .unwrap();
-        assert!(!del_res.backup.channels[0].posts[0]
-            .messages
-            .iter()
-            .any(|m| m.id == new_msg_id));
-
-        let post_res = create_local_post(
-            del_res.saved_path.clone(),
-            "ch_forum_1".to_string(),
-            "Command Forum Topic".to_string(),
-            "Starter post content".to_string(),
-            vec!["tag_docs".to_string()],
-            vec![],
-            false,
-        )
-        .unwrap();
-        assert_eq!(post_res.backup.channels[0].posts.len(), 2);
-
-        let rev_res = save_backup_revision(post_res.saved_path).unwrap();
-        assert!(rev_res.saved_path.contains("_edited_"));
-
-        assert_eq!(
-            sha256_bytes(&fs::read(&orig_json).unwrap()),
-            orig_sha_before
-        );
+        let docx_info = inspect_attachment_file(&docx_file).unwrap();
+        assert_eq!(docx_info.kind, "docx");
+        let dp = docx_info.docx_preview.unwrap();
+        assert_eq!(dp.paragraphs, vec!["Hello Docx".to_string()]);
     }
 
     #[test]

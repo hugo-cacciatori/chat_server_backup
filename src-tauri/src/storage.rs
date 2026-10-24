@@ -32,21 +32,10 @@ pub fn is_original_backup_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-pub fn get_edited_backup_path(
-    source_path: &Path,
-    new_revision: bool,
-    revision_suffix: Option<&str>,
-) -> PathBuf {
+pub fn get_edited_backup_path(source_path: &Path) -> PathBuf {
     let parent = source_path.parent().unwrap_or_else(|| Path::new("."));
     let orig_stem = base_export_stem(source_path);
-    if new_revision {
-        let ts = revision_suffix
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| Utc::now().format("%Y-%m-%d_%H%M%S").to_string());
-        parent.join(format!("{orig_stem}_edited_{ts}.json"))
-    } else {
-        parent.join(format!("{orig_stem}_edited.json"))
-    }
+    parent.join(format!("{orig_stem}_edited.json"))
 }
 
 pub fn get_edited_assets_dir(backup: &ServerBackup) -> PathBuf {
@@ -319,13 +308,11 @@ fn serialize_embed(embed: &EmbedData) -> Value {
 pub fn save_edited_backup(
     backup: &mut ServerBackup,
     target_override: Option<&Path>,
-    new_revision: bool,
-    revision_suffix: Option<&str>,
 ) -> Result<PathBuf, StorageError> {
     let source_path = Path::new(&backup.source_path);
     let dest = match target_override {
         Some(p) => p.to_path_buf(),
-        None => get_edited_backup_path(source_path, new_revision, revision_suffix),
+        None => get_edited_backup_path(source_path),
     };
 
     let orig_path = Path::new(&backup.original_source_path);
@@ -536,7 +523,7 @@ pub fn merge_session_changes_into_edited(
 
 pub fn save_session_backup(mut session_backup: ServerBackup) -> Result<PathBuf, StorageError> {
     let orig_path = PathBuf::from(&session_backup.original_source_path);
-    let edited_path = get_edited_backup_path(&orig_path, false, None);
+    let edited_path = get_edited_backup_path(&orig_path);
 
     if !session_backup.is_edited && edited_path.is_file() {
         if let (Ok(orig_backup), Ok(mut existing_edited)) = (
@@ -545,12 +532,12 @@ pub fn save_session_backup(mut session_backup: ServerBackup) -> Result<PathBuf, 
         ) {
             merge_session_changes_into_edited(&orig_backup, &session_backup, &mut existing_edited);
             stage_pending_attachments(&mut existing_edited)?;
-            return save_edited_backup(&mut existing_edited, Some(&edited_path), false, None);
+            return save_edited_backup(&mut existing_edited, Some(&edited_path));
         }
     }
 
     stage_pending_attachments(&mut session_backup)?;
-    save_edited_backup(&mut session_backup, Some(&edited_path), false, None)
+    save_edited_backup(&mut session_backup, Some(&edited_path))
 }
 
 pub fn delete_edited_backup(json_path: &Path) -> Result<PathBuf, StorageError> {
@@ -558,7 +545,7 @@ pub fn delete_edited_backup(json_path: &Path) -> Result<PathBuf, StorageError> {
     let orig_stem = base_export_stem(json_path);
     let date_label = extract_date_label(json_path);
     let orig_path = parent.join(format!("{orig_stem}.json"));
-    let edited_path = get_edited_backup_path(&orig_path, false, None);
+    let edited_path = get_edited_backup_path(&orig_path);
 
     if edited_path == orig_path || is_original_backup_path(&edited_path) {
         return Err(StorageError::ImmutableBackup(

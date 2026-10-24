@@ -1,8 +1,7 @@
-"""Standalone server backup exporter bot (`bot/export_bot.py`).
+"""Server backup exporter bot (`bot/export_bot.py`).
 
-Improvements over the initial prototype:
-1. Reads the bot token from the `CHAT_BACKUP_BOT_TOKEN` environment variable
-   (or a local `.env` file) and never hardcodes credentials.
+1. Reads the bot token from the `CHAT_BACKUP_BOT_TOKEN` process environment variable
+   and never hardcodes credentials or relies on external `.env` files.
 2. Collects both active threads (`channel.threads`) and archived threads
    (`channel.archived_threads(limit=None)`), deduplicating by thread ID.
 3. Exports messages in chronological order (`oldest_first=True`).
@@ -26,35 +25,15 @@ import discord
 from discord.ext import commands
 
 
-def load_token_from_env(env_file: Path | None = None) -> str:
-    """Resolve `CHAT_BACKUP_BOT_TOKEN` (and optional `CHAT_BACKUP_HISTORY_DIR`) from environment or `.env` file."""
+def load_token_from_env() -> str:
+    """Resolve `CHAT_BACKUP_BOT_TOKEN` from process environment variables."""
     token = os.environ.get("CHAT_BACKUP_BOT_TOKEN", "").strip()
-
-    candidates = (
-        [env_file]
-        if env_file is not None
-        else [Path(".env"), Path(__file__).resolve().parent / ".env"]
-    )
-    for candidate in candidates:
-        if candidate.is_file():
-            for raw_line in candidate.read_text(encoding="utf-8").splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, val = line.split("=", 1)
-                k = key.strip()
-                cleaned = val.strip().strip("'").strip('"')
-                if k == "CHAT_BACKUP_BOT_TOKEN" and cleaned and not token:
-                    token = cleaned
-                elif k == "CHAT_BACKUP_HISTORY_DIR" and cleaned and not os.environ.get("CHAT_BACKUP_HISTORY_DIR"):
-                    os.environ["CHAT_BACKUP_HISTORY_DIR"] = cleaned
-
     if token:
         return token
 
     raise RuntimeError(
-        "Missing bot token. Set the CHAT_BACKUP_BOT_TOKEN environment variable "
-        "or add CHAT_BACKUP_BOT_TOKEN=<token> to a local .env file."
+        "Missing bot token. Configure your Export Bot Token in Settings (Ctrl+,) "
+        "or set the CHAT_BACKUP_BOT_TOKEN environment variable."
     )
 
 
