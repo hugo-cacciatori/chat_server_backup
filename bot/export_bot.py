@@ -30,19 +30,24 @@ def load_token_from_env(env_file: Path | None = None) -> str:
     """Resolve `CHAT_BACKUP_BOT_TOKEN` (and optional `CHAT_BACKUP_HISTORY_DIR`) from environment or `.env` file."""
     token = os.environ.get("CHAT_BACKUP_BOT_TOKEN", "").strip()
 
-    candidate = env_file or Path(".env")
-    if candidate.is_file():
-        for raw_line in candidate.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, val = line.split("=", 1)
-            k = key.strip()
-            cleaned = val.strip().strip("'").strip('"')
-            if k == "CHAT_BACKUP_BOT_TOKEN" and cleaned and not token:
-                token = cleaned
-            elif k == "CHAT_BACKUP_HISTORY_DIR" and cleaned and not os.environ.get("CHAT_BACKUP_HISTORY_DIR"):
-                os.environ["CHAT_BACKUP_HISTORY_DIR"] = cleaned
+    candidates = (
+        [env_file]
+        if env_file is not None
+        else [Path(".env"), Path(__file__).resolve().parent / ".env"]
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            for raw_line in candidate.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, val = line.split("=", 1)
+                k = key.strip()
+                cleaned = val.strip().strip("'").strip('"')
+                if k == "CHAT_BACKUP_BOT_TOKEN" and cleaned and not token:
+                    token = cleaned
+                elif k == "CHAT_BACKUP_HISTORY_DIR" and cleaned and not os.environ.get("CHAT_BACKUP_HISTORY_DIR"):
+                    os.environ["CHAT_BACKUP_HISTORY_DIR"] = cleaned
 
     if token:
         return token
@@ -173,7 +178,12 @@ async def export(ctx: commands.Context[Any]) -> None:
         return
 
     date_str = datetime.now().strftime("%Y-%m-%d")
-    history_dir = Path(os.environ.get("CHAT_BACKUP_HISTORY_DIR", "history"))
+    default_hist = (
+        Path(__file__).resolve().parent / "history"
+        if (Path(__file__).resolve().parent / "history").is_dir()
+        else Path("history")
+    )
+    history_dir = Path(os.environ.get("CHAT_BACKUP_HISTORY_DIR", str(default_hist)))
     export_dir = history_dir / date_str
     export_file = export_dir / f"server_export_{date_str}.json"
     assets_dir = export_dir / f"assets_{date_str}"
