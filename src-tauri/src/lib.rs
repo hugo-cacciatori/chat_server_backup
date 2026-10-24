@@ -3,10 +3,65 @@ pub mod model;
 pub mod storage;
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use loader::{discover_backups, load_backup};
 use model::{BackupDescriptor, ServerBackup};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    #[serde(default)]
+    pub backup_root: String,
+    #[serde(default = "default_author_name")]
+    pub local_author_name: String,
+    #[serde(default = "default_author_id")]
+    pub local_author_id: String,
+}
+
+fn default_author_name() -> String {
+    "Local User".to_string()
+}
+
+fn default_author_id() -> String {
+    "local-user-1".to_string()
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            backup_root: String::new(),
+            local_author_name: default_author_name(),
+            local_author_id: default_author_id(),
+        }
+    }
+}
+
+pub fn settings_file_path() -> PathBuf {
+    let base = env::var("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."));
+    base.join("ChatServerBackup").join("settings.json")
+}
+
+pub fn load_app_settings_from(path: &Path) -> AppSettings {
+    if let Ok(raw) = fs::read_to_string(path) {
+        if let Ok(parsed) = serde_json::from_str::<AppSettings>(&raw) {
+            return parsed;
+        }
+    }
+    AppSettings::default()
+}
+
+pub fn save_app_settings_to(settings: &AppSettings, path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(path, text).map_err(|e| e.to_string())
+}
 
 pub fn default_history_dir() -> PathBuf {
     if let Ok(exe) = env::current_exe() {
@@ -31,24 +86,96 @@ pub fn default_history_dir() -> PathBuf {
 }
 
 #[tauri::command]
+fn get_app_settings() -> AppSettings {
+    let mut cfg = load_app_settings_from(&settings_file_path());
+    if cfg.backup_root.is_empty() {
+        cfg.backup_root = default_history_dir().to_string_lossy().to_string();
+    }
+    cfg
+}
+
+#[tauri::command]
+fn set_backup_root(backup_root: String) -> Result<Vec<BackupDescriptor>, String> {
+    let s_path = settings_file_path();
+    let mut cfg = load_app_settings_from(&s_path);
+    cfg.backup_root = backup_root.trim().to_string();
+    save_app_settings_to(&cfg, &s_path)?;
+
+    let dir = if cfg.backup_root.is_empty() {
+        default_history_dir()
+    } else {
+        PathBuf::from(&cfg.backup_root)
+    };
+    Ok(discover_backups(&dir))
+}
+
+#[tauri::command]
 fn list_discovered_backups(custom_dir: Option<String>) -> Vec<BackupDescriptor> {
     let dir = custom_dir
+        .filter(|s| !s.trim().is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(default_history_dir);
+        .unwrap_or_else(|| {
+            let cfg = load_app_settings_from(&settings_file_path());
+            if !cfg.backup_root.is_empty() && Path::new(&cfg.backup_root).is_dir() {
+                PathBuf::from(cfg.backup_root)
+            } else {
+                default_history_dir()
+            }
+        });
     discover_backups(&dir)
 }
 
 #[tauri::command]
-fn load_backup_command(json_path: String, sort_chronological: Option<bool>) -> Result<ServerBackup, String> {
+fn load_backup_command(
+    json_path: String,
+    sort_chronological: Option<bool>,
+) -> Result<ServerBackup, String> {
     load_backup(Path::new(&json_path), sort_chronological.unwrap_or(true))
+}
+
+#[tauri::command]
+fn open_path_in_os(path: String, reveal_in_folder: bool) -> Result<(), String> {
+    let target = Path::new(&path);
+    if !target.exists() {
+        return Err(format!("Path does not exist: {path}"));
+    }
+    if reveal_in_folder {
+        Command::new("explorer.exe")
+            .arg(format!("/select,{}", target.to_string_lossy()))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    } else {
+        Command::new("cmd")
+            .args(["/C", "start", "", &target.to_string_lossy()])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        return Err("Only http:// and https:// URLs are allowed.".to_string());
+    }
+    Command::new("cmd")
+        .args(["/C", "start", "", trimmed])
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            get_app_settings,
+            set_backup_root,
             list_discovered_backups,
-            load_backup_command
+            load_backup_command,
+            open_path_in_os,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running ChatServerBackup application");
@@ -83,7 +210,14 @@ mod tests {
                     let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
                     if !matches!(
                         name,
-                        "target" | "node_modules" | ".git" | ".git-docs" | "reference" | "history" | "dist" | "build-frontend"
+                        "target"
+                            | "node_modules"
+                            | ".git"
+                            | ".git-docs"
+                            | "reference"
+                            | "history"
+                            | "dist"
+                            | "build-frontend"
                     ) {
                         collect_files(&p, out);
                     }
@@ -256,7 +390,6 @@ mod tests {
         assert_eq!(backup.name, "Engineering Archive");
         assert_eq!(backup.channels.len(), 2);
 
-        // Forum channel: messages sorted chronologically (2001 then 2002)
         let forum = &backup.channels[0];
         let post = &forum.posts[0];
         assert_eq!(post.messages[0].id, "2001");
@@ -264,7 +397,6 @@ mod tests {
         assert!(post.messages[0].attachments[0].exists);
         assert_eq!(post.messages[0].attachments[0].extension, "png");
 
-        // Legacy Python repr embed parsed cleanly
         let embed = &post.messages[1].embeds[0];
         assert_eq!(embed.title, "Reference Document");
         assert_eq!(embed.author_name, "Spec Author");
@@ -272,7 +404,6 @@ mod tests {
         assert_eq!(embed.fields.len(), 1);
         assert!(embed.fields[0].inline);
 
-        // Text channel: direct messages grouped into primary stream ahead of child thread
         let text_ch = &backup.channels[1];
         assert_eq!(text_ch.posts.len(), 2);
         assert_eq!(text_ch.posts[0].r#type, "channel_stream");
@@ -370,7 +501,6 @@ mod tests {
         let new_att = tmp.path().join("snippet.py");
         fs::write(&new_att, "print('local attachment')\n").unwrap();
 
-        // 1. Add message with local attachment
         let added = add_message(
             &mut backup,
             "ch_forum_1",
@@ -387,7 +517,6 @@ mod tests {
             .relative_path
             .contains("assets_2026-10-20_edited"));
 
-        // 2. Edit existing original message
         let edited = edit_message(
             &mut backup,
             "ch_forum_1",
@@ -400,11 +529,9 @@ mod tests {
         assert_eq!(edited.local_edit_state, "edited");
         assert!(edited.edited_timestamp.is_some());
 
-        // 3. Delete existing message "2002"
         let deleted = delete_message(&mut backup, "ch_forum_1", "post_100", "2002").unwrap();
         assert!(deleted);
 
-        // 4. Create new forum post
         let created_post = create_post(
             &mut backup,
             "ch_forum_1",
@@ -418,11 +545,9 @@ mod tests {
         assert_eq!(created_post.messages.len(), 1);
         assert_eq!(created_post.applied_tags[0].id, "tag_docs");
 
-        // 5. Guard check: attempting to overwrite original backup must fail with ImmutableBackup
         let err = save_edited_backup(&mut backup, Some(&orig_json), false, None).unwrap_err();
         assert!(matches!(err, StorageError::ImmutableBackup(_)));
 
-        // 6. Save rolling edited file
         let rolling_path = save_edited_backup(&mut backup, None, false, None).unwrap();
         assert_eq!(
             rolling_path.file_name().unwrap().to_str().unwrap(),
@@ -430,7 +555,6 @@ mod tests {
         );
         assert!(rolling_path.is_file());
 
-        // 7. Save timestamped revision
         let rev_path =
             save_edited_backup(&mut backup, None, true, Some("2026-10-24_151000")).unwrap();
         assert_eq!(
@@ -439,14 +563,12 @@ mod tests {
         );
         assert!(rev_path.is_file());
 
-        // 8. Verify original JSON and original assets folder are 100% untouched byte-for-byte
         assert_eq!(
             sha256_bytes(&fs::read(&orig_json).unwrap()),
             orig_json_sha_before
         );
         assert_eq!(snapshot_dir_hashes(&orig_assets), orig_assets_sha_before);
 
-        // 9. Reload rolling edited backup and verify round-trip
         let reloaded = load_backup(&rolling_path, true).unwrap();
         assert!(reloaded.is_edited);
         assert_eq!(reloaded.based_on_export, "server_export_2026-10-20.json");
@@ -461,7 +583,6 @@ mod tests {
         assert_eq!(p100.messages[1].local_edit_state, "added");
         assert!(p100.messages[1].attachments[0].exists);
 
-        // 10. Discover backups lists Original, Edited, and Edited revision
         let discovered = discover_backups(&history_dir);
         let labels: Vec<_> = discovered.iter().map(|d| d.display_label.as_str()).collect();
         assert_eq!(
@@ -472,5 +593,20 @@ mod tests {
                 "2026-10-20 (Edited 2026-10-24_151000)"
             ]
         );
+    }
+
+    #[test]
+    fn test_settings_persistence() {
+        let tmp = TempDir::new().unwrap();
+        let s_file = tmp.path().join("settings.json");
+        let cfg = AppSettings {
+            backup_root: "custom/history".to_string(),
+            local_author_name: "Hugo".to_string(),
+            local_author_id: "u1".to_string(),
+        };
+        save_app_settings_to(&cfg, &s_file).unwrap();
+        let loaded = load_app_settings_from(&s_file);
+        assert_eq!(loaded.backup_root, "custom/history");
+        assert_eq!(loaded.local_author_name, "Hugo");
     }
 }

@@ -1,7 +1,16 @@
+import type { Channel, Message, PostOrThread, ServerBackup } from "../types/backup";
+
 export interface InternalServerTarget {
   serverId: string;
   channelId: string;
   messageId: string | null;
+}
+
+export interface ResolvedInternalTarget {
+  channel: Channel;
+  post: PostOrThread;
+  message: Message | null;
+  label: string;
 }
 
 /**
@@ -42,4 +51,69 @@ export function parseInternalChannelUrl(rawUrl: string): InternalServerTarget | 
     channelId,
     messageId: messageId ?? null,
   };
+}
+
+/**
+ * Resolve an InternalServerTarget against a loaded ServerBackup.
+ * In forum channels, the URL's second snowflake (`channelId`) is often the thread/post ID,
+ * and `messageId` is a specific message inside that thread.
+ */
+export function resolveTargetInBackup(
+  backup: ServerBackup | null,
+  target: InternalServerTarget,
+): ResolvedInternalTarget | null {
+  if (!backup) {
+    return null;
+  }
+
+  // 1. If messageId is provided, try finding the exact message first
+  if (target.messageId) {
+    for (const channel of backup.channels) {
+      for (const post of channel.posts) {
+        const foundMsg = post.messages.find((m) => m.id === target.messageId);
+        if (foundMsg) {
+          return {
+            channel,
+            post,
+            message: foundMsg,
+            label: `${post.name} • @${foundMsg.author.name}`,
+          };
+        }
+      }
+    }
+  }
+
+  // 2. Match post/thread ID by target.messageId or target.channelId
+  const candidateIds = [target.messageId, target.channelId].filter(
+    (id): id is string => Boolean(id),
+  );
+  for (const candId of candidateIds) {
+    for (const channel of backup.channels) {
+      for (const post of channel.posts) {
+        if (post.id === candId) {
+          return {
+            channel,
+            post,
+            message: null,
+            label: post.name,
+          };
+        }
+      }
+    }
+  }
+
+  // 3. Match top-level channel ID
+  for (const channel of backup.channels) {
+    if (channel.id === target.channelId && channel.posts.length > 0) {
+      const firstPost = channel.posts[0];
+      return {
+        channel,
+        post: firstPost,
+        message: null,
+        label: `#${channel.name}`,
+      };
+    }
+  }
+
+  return null;
 }
