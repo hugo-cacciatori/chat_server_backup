@@ -45,6 +45,11 @@ $ExeSha = (Get-FileHash -Path $DestExe -Algorithm SHA256).Hash.ToLower()
 $ChecksumsPath = "$ReleaseDir\SHA256SUMS.txt"
 "$ZipSha  ChatServerBackup-v$Version-win64.zip`n$ExeSha  ChatServerBackup/ChatServerBackup.exe`n" | Set-Content -Path $ChecksumsPath -NoNewline -Encoding UTF8
 
+# Automatically remove superseded local dist/v* folders and clean intermediate build artifacts
+Get-ChildItem -Path "$Root\dist" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne "v$Version" } | Remove-Item -Recurse -Force
+Remove-Item -Recurse -Force "$Root\build-frontend" -ErrorAction SilentlyContinue
+cargo clean --manifest-path "$Root\src-tauri\Cargo.toml"
+
 Write-Output "Local release built at: $ReleaseDir"
 Write-Output "  Executable: $DestExe ($([math]::Round((Get-Item $DestExe).Length / 1MB, 2)) MiB)"
 Write-Output "  Zip: $ZipPath"
