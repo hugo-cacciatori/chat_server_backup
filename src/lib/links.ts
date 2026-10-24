@@ -38,11 +38,20 @@ export function parseInternalChannelUrl(rawUrl: string): InternalServerTarget | 
   }
 
   const [serverId, channelId, messageId] = segments.slice(1);
-  const numericId = /^\d+$/;
-  if (!numericId.test(serverId) || !numericId.test(channelId)) {
+  const validId = /^[A-Za-z0-9_-]+$/;
+  const hasDigit = /\d/;
+  if (
+    !validId.test(serverId) ||
+    !hasDigit.test(serverId) ||
+    !validId.test(channelId) ||
+    !hasDigit.test(channelId)
+  ) {
     return null;
   }
-  if (messageId !== undefined && !numericId.test(messageId)) {
+  if (
+    messageId !== undefined &&
+    (!validId.test(messageId) || !hasDigit.test(messageId))
+  ) {
     return null;
   }
 
