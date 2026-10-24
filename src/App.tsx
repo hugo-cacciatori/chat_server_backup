@@ -25,6 +25,7 @@ import {
 import { MessageStreamPane } from "./components/MessageStreamPane";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { LightboxModal } from "./components/LightboxModal";
+import { NewBackupPromptModal } from "./components/NewBackupPromptModal";
 import { PdfReaderModal } from "./components/PdfReaderModal";
 import { SettingsModal } from "./components/SettingsModal";
 
@@ -59,6 +60,12 @@ export function App() {
     has_token_configured: false,
   });
   const lastCompletedExportsRef = useRef<number>(0);
+  const knownOriginalPathsRef = useRef<Set<string>>(new Set());
+  const hasInitializedDiscoveryRef = useRef<boolean>(false);
+  const [pendingNewBackup, setPendingNewBackup] = useState<{
+    jsonPath: string;
+    displayLabel: string;
+  } | null>(null);
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
@@ -186,6 +193,10 @@ export function App() {
         }),
       )
       .then((items) => {
+        knownOriginalPathsRef.current = new Set(
+          items.filter((b) => !b.is_edited).map((b) => b.json_path.toLowerCase()),
+        );
+        hasInitializedDiscoveryRef.current = true;
         setBackups(items);
         if (items.length > 0) {
           loadSnapshot(items[0].json_path);
@@ -314,6 +325,13 @@ export function App() {
         backupRoot: newRoot,
       })
         .then((items) => {
+          knownOriginalPathsRef.current = new Set(
+            items
+              .filter((b) => !b.is_edited)
+              .map((b) => b.json_path.toLowerCase()),
+          );
+          hasInitializedDiscoveryRef.current = true;
+          setPendingNewBackup(null);
           setBackups(items);
           if (items.length > 0) {
             loadSnapshot(items[0].json_path);
@@ -480,6 +498,52 @@ export function App() {
     }
   }, []);
 
+  const handleNewBackupArrival = useCallback(
+    (jsonPath: string, displayLabel: string) => {
+      if (!jsonPath) return;
+      if (hasUnsavedChanges && currentBackup) {
+        setPendingNewBackup({ jsonPath, displayLabel });
+      } else {
+        setPendingNewBackup(null);
+        loadSnapshot(jsonPath);
+      }
+    },
+    [hasUnsavedChanges, currentBackup, loadSnapshot],
+  );
+
+  // Continuously watch the active history folder while the app is running for newly added backups
+  useEffect(() => {
+    const watcher = window.setInterval(() => {
+      if (!hasInitializedDiscoveryRef.current) return;
+      invoke<BackupDescriptor[]>("list_discovered_backups", {
+        customDir: backupRootPath || null,
+      })
+        .then((items) => {
+          setBackups(items);
+          const originals = items.filter((b) => !b.is_edited);
+          const newlyAdded = originals.find(
+            (b) => !knownOriginalPathsRef.current.has(b.json_path.toLowerCase()),
+          );
+          if (newlyAdded) {
+            for (const orig of originals) {
+              knownOriginalPathsRef.current.add(orig.json_path.toLowerCase());
+            }
+            handleNewBackupArrival(
+              newlyAdded.json_path,
+              newlyAdded.display_label,
+            );
+          } else {
+            for (const orig of originals) {
+              knownOriginalPathsRef.current.add(orig.json_path.toLowerCase());
+            }
+          }
+        })
+        .catch(() => {});
+    }, 2000);
+
+    return () => window.clearInterval(watcher);
+  }, [backupRootPath, handleNewBackupArrival]);
+
   // Poll Export Bot runtime status while active and auto-reload snapshots on export completion
   useEffect(() => {
     const isRunning =
@@ -500,10 +564,28 @@ export function App() {
             })
               .then((items) => {
                 setBackups(items);
-                if (!hasUnsavedChanges && st.last_export_path) {
-                  loadSnapshot(st.last_export_path);
-                } else if (!hasUnsavedChanges && items.length > 0 && !selectedBackupPath) {
-                  loadSnapshot(items[0].json_path);
+                for (const orig of items.filter((b) => !b.is_edited)) {
+                  knownOriginalPathsRef.current.add(
+                    orig.json_path.toLowerCase(),
+                  );
+                }
+                const targetDesc =
+                  items.find(
+                    (b) =>
+                      st.last_export_path &&
+                      b.json_path.toLowerCase() ===
+                        st.last_export_path.toLowerCase(),
+                  ) ??
+                  items.find((b) => !b.is_edited) ??
+                  items[0] ??
+                  null;
+                if (targetDesc) {
+                  handleNewBackupArrival(
+                    targetDesc.json_path,
+                    targetDesc.display_label,
+                  );
+                } else if (st.last_export_path) {
+                  handleNewBackupArrival(st.last_export_path, "New Backup");
                 }
               })
               .catch(() => {});
@@ -513,13 +595,37 @@ export function App() {
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [
-    botStatus.state,
-    backupRootPath,
-    hasUnsavedChanges,
-    selectedBackupPath,
-    loadSnapshot,
-  ]);
+  }, [botStatus.state, backupRootPath, handleNewBackupArrival]);
+
+  const handleSaveAndSwitchToNewBackup = useCallback(async () => {
+    if (!pendingNewBackup) return;
+    const targetPath = pendingNewBackup.jsonPath;
+    setPendingNewBackup(null);
+    if (currentBackup && hasUnsavedChanges) {
+      try {
+        await invoke<BackupMutationResult>("save_backup_changes", {
+          backup: currentBackup,
+        });
+        const items = await invoke<BackupDescriptor[]>(
+          "list_discovered_backups",
+          {
+            customDir: backupRootPath || null,
+          },
+        );
+        setBackups(items);
+      } catch (err) {
+        console.error("Failed to save edits before switching backup:", err);
+      }
+    }
+    loadSnapshot(targetPath);
+  }, [pendingNewBackup, currentBackup, hasUnsavedChanges, backupRootPath, loadSnapshot]);
+
+  const handleDiscardAndSwitchToNewBackup = useCallback(() => {
+    if (!pendingNewBackup) return;
+    const targetPath = pendingNewBackup.jsonPath;
+    setPendingNewBackup(null);
+    loadSnapshot(targetPath);
+  }, [pendingNewBackup, loadSnapshot]);
 
   const handleSendMessage = (
     content: string,
@@ -794,6 +900,16 @@ export function App() {
           void handleChangeLocalAuthor(name, id);
         }}
         onSaveBotToken={handleSaveBotToken}
+      />
+
+      {/* Prompt when a new backup arrives while unsaved edits are pending */}
+      <NewBackupPromptModal
+        isOpen={pendingNewBackup !== null}
+        newBackupLabel={pendingNewBackup?.displayLabel ?? ""}
+        currentDateLabel={currentBackup?.date_label ?? "Current Backup"}
+        onSaveAndSwitch={handleSaveAndSwitchToNewBackup}
+        onDiscardAndSwitch={handleDiscardAndSwitchToNewBackup}
+        onStayHere={() => setPendingNewBackup(null)}
       />
     </div>
   );

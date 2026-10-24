@@ -8,6 +8,7 @@ import { searchAcrossBackup } from "../src/components/GlobalSearchModal";
 import { cleanDisplayFilename } from "../src/components/MessageCard";
 import { SidebarChannels } from "../src/components/SidebarChannels";
 import { SettingsModal } from "../src/components/SettingsModal";
+import { NewBackupPromptModal } from "../src/components/NewBackupPromptModal";
 import {
   formatByteSize,
   formatDurationSeconds,
@@ -339,5 +340,22 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
     expect(modalHtml).toContain("Export Bot Token");
     expect(modalHtml).toContain("Token Configured");
     expect(modalHtml).toContain("Local Author Profile");
+
+    const promptHtml = renderToStaticMarkup(
+      createElement(NewBackupPromptModal, {
+        isOpen: true,
+        newBackupLabel: "2026-10-24 (Original)",
+        currentDateLabel: "2026-10-20",
+        onSaveAndSwitch: () => {},
+        onDiscardAndSwitch: () => {},
+        onStayHere: () => {},
+      }),
+    );
+
+    expect(promptHtml).toContain("New Backup Available");
+    expect(promptHtml).toContain("2026-10-24 (Original)");
+    expect(promptHtml).toContain("2026-10-20 (Edited)");
+    expect(promptHtml).toContain("Discard Edits &amp; Switch");
+    expect(promptHtml).toContain("Stay Here");
   });
 });
