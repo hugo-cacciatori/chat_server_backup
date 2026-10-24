@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ArrowUpDown,
   FileText,
@@ -9,8 +9,10 @@ import {
   MessageSquare,
   Music,
   Paperclip,
+  Plus,
   Search,
   Tag,
+  X,
 } from "lucide-react";
 import type { Channel, PostOrThread } from "../types/backup";
 
@@ -30,6 +32,12 @@ interface PostListPaneProps {
   onChangeTagMatchMode: (mode: TagMatchMode) => void;
   onChangeSortMode: (mode: PostSortMode) => void;
   onSelectPost: (postId: string) => void;
+  onCreatePost?: (
+    title: string,
+    initialContent: string,
+    tagIds: string[],
+    attachmentPaths: string[],
+  ) => Promise<void> | void;
 }
 
 const IMG_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
@@ -136,9 +144,60 @@ export function PostListPane({
   onChangeTagMatchMode,
   onChangeSortMode,
   onSelectPost,
+  onCreatePost,
 }: PostListPaneProps) {
+  const [creatingPost, setCreatingPost] = useState(false);
+  const [newPostTitle, setNewPostTitle] = useState("");
+  const [newPostBody, setNewPostBody] = useState("");
+  const [newPostTagIds, setNewPostTagIds] = useState<Set<string>>(new Set());
+  const [newPostAttInput, setNewPostAttInput] = useState("");
+  const [newPostAttPaths, setNewPostAttPaths] = useState<string[]>([]);
+  const [submittingPost, setSubmittingPost] = useState(false);
+
   const allPosts = channel?.posts ?? [];
   const availableTags = channel?.available_tags ?? [];
+
+  const handleToggleNewPostTag = (tagId: string) => {
+    setNewPostTagIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagId)) next.delete(tagId);
+      else next.add(tagId);
+      return next;
+    });
+  };
+
+  const handleAddNewPostAtt = () => {
+    const p = newPostAttInput.trim();
+    if (!p) return;
+    setNewPostAttPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
+    setNewPostAttInput("");
+  };
+
+  const handleCreatePostSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onCreatePost || submittingPost) return;
+    const title = newPostTitle.trim();
+    const body = newPostBody.trim();
+    if (!title || (!body && newPostAttPaths.length === 0)) return;
+
+    setSubmittingPost(true);
+    try {
+      await onCreatePost(
+        title,
+        body,
+        Array.from(newPostTagIds),
+        newPostAttPaths,
+      );
+      setNewPostTitle("");
+      setNewPostBody("");
+      setNewPostTagIds(new Set());
+      setNewPostAttPaths([]);
+      setNewPostAttInput("");
+      setCreatingPost(false);
+    } finally {
+      setSubmittingPost(false);
+    }
+  };
 
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -184,10 +243,144 @@ export function PostListPane({
               {channel.name}
             </h2>
           </div>
-          <span className="shrink-0 rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-300">
-            {filteredPosts.length} / {allPosts.length}
-          </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {onCreatePost && (
+              <button
+                type="button"
+                onClick={() => setCreatingPost((v) => !v)}
+                title={isForum ? "Create new forum post" : "Create new thread"}
+                className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-indigo-500 cursor-pointer"
+              >
+                <Plus className="h-3 w-3" />
+                <span>{isForum ? "New Post" : "New Thread"}</span>
+              </button>
+            )}
+            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-300">
+              {filteredPosts.length} / {allPosts.length}
+            </span>
+          </div>
         </div>
+
+        {/* Inline New Post / Thread Form */}
+        {creatingPost && onCreatePost && (
+          <form
+            onSubmit={handleCreatePostSubmit}
+            className="mt-3 space-y-2 rounded-xl border border-indigo-500/40 bg-slate-950/90 p-2.5"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-indigo-300">
+                {isForum ? "Create Forum Post" : "Create Thread"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setCreatingPost(false)}
+                className="text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <input
+              type="text"
+              value={newPostTitle}
+              onChange={(e) => setNewPostTitle(e.target.value)}
+              placeholder="Post / thread title…"
+              required
+              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+            />
+
+            {isForum && availableTags.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {availableTags.map((tag) => {
+                  const selected = newPostTagIds.has(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => handleToggleNewPostTag(tag.id)}
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
+                        selected
+                          ? "bg-indigo-600 text-white"
+                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      }`}
+                    >
+                      {tag.emoji && <span>{tag.emoji}</span>}
+                      <span>{tag.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <textarea
+              value={newPostBody}
+              onChange={(e) => setNewPostBody(e.target.value)}
+              placeholder="Starter message (markdown supported)…"
+              rows={3}
+              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+            />
+
+            <div className="flex items-center gap-1">
+              <input
+                type="text"
+                value={newPostAttInput}
+                onChange={(e) => setNewPostAttInput(e.target.value)}
+                placeholder="Attach local file path (optional)…"
+                className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleAddNewPostAtt}
+                className="rounded-md bg-slate-800 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700 cursor-pointer"
+              >
+                Attach
+              </button>
+            </div>
+
+            {newPostAttPaths.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {newPostAttPaths.map((p) => (
+                  <span
+                    key={p}
+                    className="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] text-indigo-200"
+                  >
+                    <span className="max-w-[180px] truncate">{p}</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNewPostAttPaths((prev) => prev.filter((x) => x !== p))
+                      }
+                      className="text-indigo-300 hover:text-white cursor-pointer"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setCreatingPost(false)}
+                className="rounded-md px-2 py-1 text-[11px] text-slate-400 hover:text-white cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  submittingPost ||
+                  !newPostTitle.trim() ||
+                  (!newPostBody.trim() && newPostAttPaths.length === 0)
+                }
+                className="rounded-md bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40 cursor-pointer"
+              >
+                Create
+              </button>
+            </div>
+          </form>
+        )}
 
         {/* Search & Sort Controls */}
         <div className="mt-2.5 flex items-center gap-1.5">

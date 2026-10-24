@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { BackupDescriptor, ServerBackup } from "./types/backup";
+import type {
+  BackupDescriptor,
+  BackupMutationResult,
+  ServerBackup,
+} from "./types/backup";
 import {
   resolveTargetInBackup,
   type InternalServerTarget,
@@ -31,6 +35,7 @@ interface AppSettings {
 export function App() {
   const [backups, setBackups] = useState<BackupDescriptor[]>([]);
   const [backupRootPath, setBackupRootPath] = useState<string>("history");
+  const [localAuthorName, setLocalAuthorName] = useState<string>("Local User");
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
 
@@ -126,6 +131,9 @@ export function App() {
       .then((cfg) => {
         if (cfg.backup_root) {
           setBackupRootPath(cfg.backup_root);
+        }
+        if (cfg.local_author_name) {
+          setLocalAuthorName(cfg.local_author_name);
         }
         return invoke<BackupDescriptor[]>("list_discovered_backups", {
           customDir: cfg.backup_root || null,
@@ -290,6 +298,138 @@ export function App() {
     );
   };
 
+  const applyMutationResult = useCallback(
+    async (res: BackupMutationResult) => {
+      setCurrentBackup(res.backup);
+      setSelectedBackupPath(res.saved_path);
+      if (res.active_post_id) {
+        setSelectedPostId(res.active_post_id);
+      }
+      if (res.active_message_id) {
+        setHighlightedMessageId(res.active_message_id);
+      }
+      try {
+        const items = await invoke<BackupDescriptor[]>(
+          "list_discovered_backups",
+          {
+            customDir: backupRootPath || null,
+          },
+        );
+        setBackups(items);
+      } catch (err) {
+        console.error("Failed to refresh backups list:", err);
+      }
+    },
+    [backupRootPath],
+  );
+
+  const handleChangeLocalAuthor = async (authorName: string) => {
+    setLocalAuthorName(authorName);
+    try {
+      await invoke<AppSettings>("set_local_author_profile", {
+        authorName,
+        authorId: null,
+      });
+    } catch (err) {
+      console.error("Failed to save local author profile:", err);
+    }
+  };
+
+  const handleSendMessage = async (
+    content: string,
+    attachmentPaths: string[],
+    replyToId: string | null,
+  ) => {
+    if (!selectedBackupPath || !selectedChannelId || !selectedPostId) return;
+    try {
+      const res = await invoke<BackupMutationResult>("create_local_message", {
+        jsonPath: selectedBackupPath,
+        channelId: selectedChannelId,
+        postId: selectedPostId,
+        content,
+        attachmentPaths,
+        replyToId,
+        newRevision: false,
+      });
+      await applyMutationResult(res);
+    } catch (err) {
+      console.error("Failed to send local message:", err);
+    }
+  };
+
+  const handleEditMessage = async (
+    messageId: string,
+    newContent: string,
+    newAttachmentPaths: string[],
+  ) => {
+    if (!selectedBackupPath || !selectedChannelId || !selectedPostId) return;
+    try {
+      const res = await invoke<BackupMutationResult>("edit_local_message", {
+        jsonPath: selectedBackupPath,
+        channelId: selectedChannelId,
+        postId: selectedPostId,
+        messageId,
+        newContent,
+        newAttachmentPaths,
+        newRevision: false,
+      });
+      await applyMutationResult(res);
+    } catch (err) {
+      console.error("Failed to edit local message:", err);
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!selectedBackupPath || !selectedChannelId || !selectedPostId) return;
+    try {
+      const res = await invoke<BackupMutationResult>("delete_local_message", {
+        jsonPath: selectedBackupPath,
+        channelId: selectedChannelId,
+        postId: selectedPostId,
+        messageId,
+        newRevision: false,
+      });
+      await applyMutationResult(res);
+    } catch (err) {
+      console.error("Failed to delete local message:", err);
+    }
+  };
+
+  const handleCreatePost = async (
+    title: string,
+    initialContent: string,
+    tagIds: string[],
+    attachmentPaths: string[],
+  ) => {
+    if (!selectedBackupPath || !selectedChannelId) return;
+    try {
+      const res = await invoke<BackupMutationResult>("create_local_post", {
+        jsonPath: selectedBackupPath,
+        channelId: selectedChannelId,
+        title,
+        initialContent,
+        tagIds,
+        attachmentPaths,
+        newRevision: false,
+      });
+      await applyMutationResult(res);
+    } catch (err) {
+      console.error("Failed to create local post:", err);
+    }
+  };
+
+  const handleSaveAsNewRevision = async () => {
+    if (!selectedBackupPath) return;
+    try {
+      const res = await invoke<BackupMutationResult>("save_backup_revision", {
+        jsonPath: selectedBackupPath,
+      });
+      await applyMutationResult(res);
+    } catch (err) {
+      console.error("Failed to save backup revision:", err);
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
       {/* Left Pane: Server & Channels */}
@@ -299,10 +439,13 @@ export function App() {
         currentBackup={currentBackup}
         selectedChannelId={selectedChannelId}
         backupRootPath={backupRootPath}
+        localAuthorName={localAuthorName}
         onSelectBackup={loadSnapshot}
         onSelectChannel={handleSelectChannel}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
         onChangeBackupRoot={handleChangeBackupRoot}
+        onSaveAsNewRevision={handleSaveAsNewRevision}
+        onChangeLocalAuthor={handleChangeLocalAuthor}
       />
 
       {/* Middle Pane: Posts / Threads & Multi-Tag Filter Bar */}
@@ -319,6 +462,7 @@ export function App() {
         onChangeTagMatchMode={setTagMatchMode}
         onChangeSortMode={setSortMode}
         onSelectPost={handleSelectPost}
+        onCreatePost={handleCreatePost}
       />
 
       {/* Right Pane: Message Stream */}
@@ -331,6 +475,7 @@ export function App() {
         canGoBack={historyIndex > 0}
         canGoForward={historyIndex >= 0 && historyIndex < history.length - 1}
         highlightedMessageId={highlightedMessageId}
+        localAuthorName={localAuthorName}
         onChangeMessageQuery={setMessageQuery}
         onToggleOldestFirst={() => setOldestFirst((v) => !v)}
         onGoBack={() => {
@@ -362,6 +507,9 @@ export function App() {
         }
         onOpenFileDefault={handleOpenFileDefault}
         onRevealInExplorer={handleRevealInExplorer}
+        onSendMessage={handleSendMessage}
+        onEditMessage={handleEditMessage}
+        onDeleteMessage={handleDeleteMessage}
       />
 
       {/* Global Search Modal (Ctrl+K) */}

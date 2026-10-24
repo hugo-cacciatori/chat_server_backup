@@ -9,9 +9,35 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use loader::{discover_backups, load_backup};
-use model::{BackupDescriptor, ServerBackup};
+use model::{Author, BackupDescriptor, ServerBackup};
 use previews::{inspect_attachment_file, AttachmentInspection};
 use serde::{Deserialize, Serialize};
+use storage::{add_message, create_post, delete_message, edit_message, save_edited_backup};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupMutationResult {
+    pub backup: ServerBackup,
+    pub saved_path: String,
+    pub active_post_id: Option<String>,
+    pub active_message_id: Option<String>,
+}
+
+fn current_local_author() -> Author {
+    let cfg = load_app_settings_from(&settings_file_path());
+    Author {
+        id: if cfg.local_author_id.trim().is_empty() {
+            default_author_id()
+        } else {
+            cfg.local_author_id
+        },
+        name: if cfg.local_author_name.trim().is_empty() {
+            default_author_name()
+        } else {
+            cfg.local_author_name
+        },
+        bot: false,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -141,6 +167,180 @@ fn inspect_attachment(path: String) -> Result<AttachmentInspection, String> {
 }
 
 #[tauri::command]
+fn set_local_author_profile(author_name: String, author_id: Option<String>) -> Result<AppSettings, String> {
+    let s_path = settings_file_path();
+    let mut cfg = load_app_settings_from(&s_path);
+    let trimmed_name = author_name.trim();
+    if !trimmed_name.is_empty() {
+        cfg.local_author_name = trimmed_name.to_string();
+    }
+    if let Some(id_val) = author_id {
+        let trimmed_id = id_val.trim();
+        if !trimmed_id.is_empty() {
+            cfg.local_author_id = trimmed_id.to_string();
+        }
+    }
+    save_app_settings_to(&cfg, &s_path)?;
+    Ok(cfg)
+}
+
+#[tauri::command]
+fn create_local_message(
+    json_path: String,
+    channel_id: String,
+    post_id: String,
+    content: String,
+    attachment_paths: Vec<String>,
+    reply_to_id: Option<String>,
+    new_revision: bool,
+) -> Result<BackupMutationResult, String> {
+    let mut backup = load_backup(Path::new(&json_path), true)?;
+    let author = current_local_author();
+    let att_files: Vec<PathBuf> = attachment_paths
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .collect();
+
+    let created = add_message(
+        &mut backup,
+        &channel_id,
+        &post_id,
+        author,
+        &content,
+        &att_files,
+        reply_to_id,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let saved = save_edited_backup(&mut backup, None, new_revision, None)
+        .map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&saved, true)?;
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: saved.to_string_lossy().to_string(),
+        active_post_id: Some(post_id),
+        active_message_id: Some(created.id),
+    })
+}
+
+#[tauri::command]
+fn edit_local_message(
+    json_path: String,
+    channel_id: String,
+    post_id: String,
+    message_id: String,
+    new_content: String,
+    new_attachment_paths: Vec<String>,
+    new_revision: bool,
+) -> Result<BackupMutationResult, String> {
+    let mut backup = load_backup(Path::new(&json_path), true)?;
+    let att_files: Vec<PathBuf> = new_attachment_paths
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .collect();
+
+    let updated = edit_message(
+        &mut backup,
+        &channel_id,
+        &post_id,
+        &message_id,
+        &new_content,
+        &att_files,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let saved = save_edited_backup(&mut backup, None, new_revision, None)
+        .map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&saved, true)?;
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: saved.to_string_lossy().to_string(),
+        active_post_id: Some(post_id),
+        active_message_id: Some(updated.id),
+    })
+}
+
+#[tauri::command]
+fn delete_local_message(
+    json_path: String,
+    channel_id: String,
+    post_id: String,
+    message_id: String,
+    new_revision: bool,
+) -> Result<BackupMutationResult, String> {
+    let mut backup = load_backup(Path::new(&json_path), true)?;
+    delete_message(&mut backup, &channel_id, &post_id, &message_id)
+        .map_err(|e| e.to_string())?;
+
+    let saved = save_edited_backup(&mut backup, None, new_revision, None)
+        .map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&saved, true)?;
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: saved.to_string_lossy().to_string(),
+        active_post_id: Some(post_id),
+        active_message_id: None,
+    })
+}
+
+#[tauri::command]
+fn create_local_post(
+    json_path: String,
+    channel_id: String,
+    title: String,
+    initial_content: String,
+    tag_ids: Vec<String>,
+    attachment_paths: Vec<String>,
+    new_revision: bool,
+) -> Result<BackupMutationResult, String> {
+    let mut backup = load_backup(Path::new(&json_path), true)?;
+    let author = current_local_author();
+    let att_files: Vec<PathBuf> = attachment_paths
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+        .collect();
+
+    let created = create_post(
+        &mut backup,
+        &channel_id,
+        &title,
+        author,
+        &initial_content,
+        &tag_ids,
+        &att_files,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let saved = save_edited_backup(&mut backup, None, new_revision, None)
+        .map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&saved, true)?;
+    let first_msg_id = created.messages.first().map(|m| m.id.clone());
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: saved.to_string_lossy().to_string(),
+        active_post_id: Some(created.id),
+        active_message_id: first_msg_id,
+    })
+}
+
+#[tauri::command]
+fn save_backup_revision(json_path: String) -> Result<BackupMutationResult, String> {
+    let mut backup = load_backup(Path::new(&json_path), true)?;
+    let saved = save_edited_backup(&mut backup, None, true, None)
+        .map_err(|e| e.to_string())?;
+    let reloaded = load_backup(&saved, true)?;
+    Ok(BackupMutationResult {
+        backup: reloaded,
+        saved_path: saved.to_string_lossy().to_string(),
+        active_post_id: None,
+        active_message_id: None,
+    })
+}
+
+#[tauri::command]
 fn open_path_in_os(path: String, reveal_in_folder: bool) -> Result<(), String> {
     let target = Path::new(&path);
     if !target.exists() {
@@ -179,9 +379,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_settings,
             set_backup_root,
+            set_local_author_profile,
             list_discovered_backups,
             load_backup_command,
             inspect_attachment,
+            create_local_message,
+            edit_local_message,
+            delete_local_message,
+            create_local_post,
+            save_backup_revision,
             open_path_in_os,
             open_external_url
         ])
@@ -656,5 +862,77 @@ mod tests {
             let entries = sz_info.archive_entries.unwrap();
             assert!(!entries.is_empty());
         }
+    }
+
+    #[test]
+    fn test_local_editing_commands_workflow() {
+        let tmp = TempDir::new().unwrap();
+        let history_dir = create_sample_history(tmp.path());
+        let orig_json = history_dir
+            .join("2026-10-20")
+            .join("server_export_2026-10-20.json");
+        let orig_sha_before = sha256_bytes(&fs::read(&orig_json).unwrap());
+
+        let msg_res = create_local_message(
+            orig_json.to_string_lossy().to_string(),
+            "ch_forum_1".to_string(),
+            "post_100".to_string(),
+            "Command-created message".to_string(),
+            vec![],
+            Some("2001".to_string()),
+            false,
+        )
+        .unwrap();
+        assert!(msg_res.backup.is_edited);
+        let new_msg_id = msg_res.active_message_id.unwrap();
+
+        let edit_res = edit_local_message(
+            msg_res.saved_path.clone(),
+            "ch_forum_1".to_string(),
+            "post_100".to_string(),
+            new_msg_id.clone(),
+            "Command-created message (updated)".to_string(),
+            vec![],
+            false,
+        )
+        .unwrap();
+        let edited_post = &edit_res.backup.channels[0].posts[0];
+        assert!(edited_post
+            .messages
+            .iter()
+            .any(|m| m.id == new_msg_id && m.content == "Command-created message (updated)"));
+
+        let del_res = delete_local_message(
+            edit_res.saved_path.clone(),
+            "ch_forum_1".to_string(),
+            "post_100".to_string(),
+            new_msg_id.clone(),
+            false,
+        )
+        .unwrap();
+        assert!(!del_res.backup.channels[0].posts[0]
+            .messages
+            .iter()
+            .any(|m| m.id == new_msg_id));
+
+        let post_res = create_local_post(
+            del_res.saved_path.clone(),
+            "ch_forum_1".to_string(),
+            "Command Forum Topic".to_string(),
+            "Starter post content".to_string(),
+            vec!["tag_docs".to_string()],
+            vec![],
+            false,
+        )
+        .unwrap();
+        assert_eq!(post_res.backup.channels[0].posts.len(), 2);
+
+        let rev_res = save_backup_revision(post_res.saved_path).unwrap();
+        assert!(rev_res.saved_path.contains("_edited_"));
+
+        assert_eq!(
+            sha256_bytes(&fs::read(&orig_json).unwrap()),
+            orig_sha_before
+        );
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "chat_server_backup"
-version = "0.4.0"
+version = "0.5.0"
 description = "Local desktop mirror and non-destructive editor for chat server backups"
 authors = ["Hugo Cacciatori"]
 edition = "2021"

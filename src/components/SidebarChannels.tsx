@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Archive,
+  CopyPlus,
   FolderCog,
   Hash,
   LayoutList,
@@ -8,6 +9,7 @@ import {
   PencilLine,
   Search,
   Server,
+  UserCircle2,
 } from "lucide-react";
 import type { BackupDescriptor, Channel, ServerBackup } from "../types/backup";
 
@@ -17,10 +19,13 @@ interface SidebarChannelsProps {
   currentBackup: ServerBackup | null;
   selectedChannelId: string;
   backupRootPath: string;
+  localAuthorName: string;
   onSelectBackup: (jsonPath: string) => void;
   onSelectChannel: (channelId: string) => void;
   onOpenGlobalSearch: () => void;
   onChangeBackupRoot: (newRoot: string) => void;
+  onSaveAsNewRevision?: () => Promise<void> | void;
+  onChangeLocalAuthor?: (authorName: string) => Promise<void> | void;
 }
 
 export function SidebarChannels({
@@ -29,13 +34,17 @@ export function SidebarChannels({
   currentBackup,
   selectedChannelId,
   backupRootPath,
+  localAuthorName,
   onSelectBackup,
   onSelectChannel,
   onOpenGlobalSearch,
   onChangeBackupRoot,
+  onSaveAsNewRevision,
+  onChangeLocalAuthor,
 }: SidebarChannelsProps) {
   const [editingRoot, setEditingRoot] = useState(false);
   const [rootInput, setRootInput] = useState(backupRootPath);
+  const [authorInput, setAuthorInput] = useState(localAuthorName);
 
   const channels = currentBackup?.channels ?? [];
   const forumChannels = channels.filter((c) => c.type === "forum");
@@ -45,6 +54,9 @@ export function SidebarChannels({
     e.preventDefault();
     setEditingRoot(false);
     onChangeBackupRoot(rootInput.trim());
+    if (onChangeLocalAuthor && authorInput.trim()) {
+      onChangeLocalAuthor(authorInput.trim());
+    }
   };
 
   const renderChannelButton = (ch: Channel) => {
@@ -102,9 +114,10 @@ export function SidebarChannels({
             type="button"
             onClick={() => {
               setRootInput(backupRootPath);
+              setAuthorInput(localAuthorName);
               setEditingRoot((v) => !v);
             }}
-            title="Configure backup folder path"
+            title="Configure backup folder & local author profile"
             className="rounded-md p-1.5 text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
           >
             <FolderCog className="h-4 w-4" />
@@ -113,34 +126,63 @@ export function SidebarChannels({
 
         {/* Status Badge: Original vs Edited */}
         {currentBackup && (
-          <div className="mt-2.5 flex items-center gap-1.5">
-            {currentBackup.is_edited ? (
-              <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-300 ring-1 ring-amber-500/30">
-                <PencilLine className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Edited Snapshot</span>
-              </span>
-            ) : (
-              <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30">
-                <Lock className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Original Backup (Immutable)</span>
-              </span>
+          <div className="mt-2.5 space-y-1.5">
+            <div className="flex items-center gap-1.5">
+              {currentBackup.is_edited ? (
+                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-amber-500/15 px-2.5 py-1 text-[11px] font-medium text-amber-300 ring-1 ring-amber-500/30">
+                  <PencilLine className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Edited Snapshot</span>
+                </span>
+              ) : (
+                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30">
+                  <Lock className="h-3.5 w-3.5 shrink-0" />
+                  <span className="truncate">Original Backup (Immutable)</span>
+                </span>
+              )}
+            </div>
+
+            {onSaveAsNewRevision && (
+              <button
+                type="button"
+                onClick={() => onSaveAsNewRevision()}
+                title="Save current snapshot as a timestamped revision (*_edited_YYYY-MM-DD_HHMMSS.json)"
+                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-slate-800 bg-slate-900/90 px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:border-indigo-500/40 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+              >
+                <CopyPlus className="h-3.5 w-3.5 text-indigo-400" />
+                <span>Save As New Revision</span>
+              </button>
             )}
           </div>
         )}
 
-        {/* Backup Folder Path Editor */}
+        {/* Backup Folder & Local Author Profile Editor */}
         {editingRoot && (
-          <form onSubmit={handleSaveRoot} className="mt-2.5 space-y-1.5">
-            <label className="block text-[11px] font-medium text-slate-400">
-              Backup history directory:
-            </label>
-            <input
-              type="text"
-              value={rootInput}
-              onChange={(e) => setRootInput(e.target.value)}
-              placeholder="history"
-              className="w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-            />
+          <form onSubmit={handleSaveRoot} className="mt-2.5 space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5">
+            <div>
+              <label className="block text-[11px] font-medium text-slate-400">
+                Backup history directory:
+              </label>
+              <input
+                type="text"
+                value={rootInput}
+                onChange={(e) => setRootInput(e.target.value)}
+                placeholder="history"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
+                <UserCircle2 className="h-3 w-3 text-indigo-400" />
+                <span>Local author name:</span>
+              </label>
+              <input
+                type="text"
+                value={authorInput}
+                onChange={(e) => setAuthorInput(e.target.value)}
+                placeholder="Local User"
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
             <div className="flex justify-end gap-1.5">
               <button
                 type="button"

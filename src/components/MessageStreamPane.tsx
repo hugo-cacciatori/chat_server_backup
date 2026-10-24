@@ -1,10 +1,14 @@
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
   ArrowUpDown,
+  CornerUpLeft,
   MessageSquare,
+  Paperclip,
+  Plus,
   Search,
+  Send,
   X,
 } from "lucide-react";
 import type { Channel, Message, PostOrThread, ServerBackup } from "../types/backup";
@@ -20,6 +24,7 @@ interface MessageStreamPaneProps {
   canGoBack: boolean;
   canGoForward: boolean;
   highlightedMessageId: string | null;
+  localAuthorName: string;
   onChangeMessageQuery: (query: string) => void;
   onToggleOldestFirst: () => void;
   onGoBack: () => void;
@@ -31,6 +36,17 @@ interface MessageStreamPaneProps {
   onOpenPdfModal: (src: string, title: string, filePath?: string | null) => void;
   onOpenFileDefault: (filePath: string) => void;
   onRevealInExplorer: (filePath: string) => void;
+  onSendMessage: (
+    content: string,
+    attachmentPaths: string[],
+    replyToId: string | null,
+  ) => Promise<void> | void;
+  onEditMessage: (
+    messageId: string,
+    newContent: string,
+    newAttachmentPaths: string[],
+  ) => Promise<void> | void;
+  onDeleteMessage: (messageId: string) => Promise<void> | void;
 }
 
 function getDateSeparatorLabel(iso: string): string {
@@ -53,6 +69,7 @@ export function MessageStreamPane({
   canGoBack,
   canGoForward,
   highlightedMessageId,
+  localAuthorName,
   onChangeMessageQuery,
   onToggleOldestFirst,
   onGoBack,
@@ -64,9 +81,47 @@ export function MessageStreamPane({
   onOpenPdfModal,
   onOpenFileDefault,
   onRevealInExplorer,
+  onSendMessage,
+  onEditMessage,
+  onDeleteMessage,
 }: MessageStreamPaneProps) {
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const [composerText, setComposerText] = useState("");
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [showAttachInput, setShowAttachInput] = useState(false);
+  const [attachPathInput, setAttachPathInput] = useState("");
+  const [stagedAttachPaths, setStagedAttachPaths] = useState<string[]>([]);
+  const [sending, setSending] = useState(false);
+
+  // Clear reply target when switching post
+  useEffect(() => {
+    setReplyingTo(null);
+  }, [post?.id]);
+
+  const handleAddComposerAttachment = () => {
+    const p = attachPathInput.trim();
+    if (!p) return;
+    setStagedAttachPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
+    setAttachPathInput("");
+  };
+
+  const handleSubmitComposer = async () => {
+    if (sending) return;
+    const trimmed = composerText.trim();
+    if (!trimmed && stagedAttachPaths.length === 0) return;
+    setSending(true);
+    try {
+      await onSendMessage(trimmed, stagedAttachPaths, replyingTo?.id ?? null);
+      setComposerText("");
+      setStagedAttachPaths([]);
+      setAttachPathInput("");
+      setShowAttachInput(false);
+      setReplyingTo(null);
+    } finally {
+      setSending(false);
+    }
+  };
 
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -259,12 +314,131 @@ export function MessageStreamPane({
                   onOpenPdfModal={onOpenPdfModal}
                   onOpenFileDefault={onOpenFileDefault}
                   onRevealInExplorer={onRevealInExplorer}
+                  onReplyMessage={(targetMsg) => setReplyingTo(targetMsg)}
+                  onEditMessage={onEditMessage}
+                  onDeleteMessage={onDeleteMessage}
                 />
               </React.Fragment>
             );
           })
         )}
       </div>
+
+      {/* Bottom Message Composer (Saves non-destructively to *_edited.json) */}
+      <footer className="shrink-0 border-t border-slate-800/90 bg-slate-950/95 px-6 py-3">
+        {replyingTo && (
+          <div className="mb-2 flex items-center justify-between rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-1.5 text-xs text-indigo-200">
+            <div className="flex min-w-0 items-center gap-2">
+              <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
+              <span className="truncate">
+                Replying to{" "}
+                <strong className="font-semibold text-white">
+                  @{replyingTo.author.name}
+                </strong>
+                : {replyingTo.content.slice(0, 80)}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyingTo(null)}
+              className="rounded p-0.5 text-indigo-300 hover:bg-indigo-500/20 hover:text-white cursor-pointer"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+
+        {showAttachInput && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/90 p-2">
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <input
+              type="text"
+              value={attachPathInput}
+              onChange={(e) => setAttachPathInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAddComposerAttachment();
+                }
+              }}
+              placeholder="Enter local file path to stage in edited assets folder…"
+              className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-2.5 py-1 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleAddComposerAttachment}
+              className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-200 hover:bg-slate-700 cursor-pointer"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>Stage File</span>
+            </button>
+          </div>
+        )}
+
+        {stagedAttachPaths.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {stagedAttachPaths.map((p) => (
+              <span
+                key={p}
+                className="inline-flex items-center gap-1.5 rounded-md bg-indigo-500/15 px-2.5 py-1 text-xs text-indigo-200 ring-1 ring-indigo-500/30"
+              >
+                <Paperclip className="h-3 w-3 text-indigo-400" />
+                <span className="max-w-xs truncate">{p}</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setStagedAttachPaths((prev) => prev.filter((x) => x !== p))
+                  }
+                  className="text-indigo-300 hover:text-white cursor-pointer"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-end gap-2">
+          <button
+            type="button"
+            onClick={() => setShowAttachInput((v) => !v)}
+            title="Attach local files"
+            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition-colors cursor-pointer ${
+              showAttachInput || stagedAttachPaths.length > 0
+                ? "border-indigo-500/50 bg-indigo-600/20 text-indigo-300"
+                : "border-slate-800 bg-slate-900 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+            }`}
+          >
+            <Paperclip className="h-4 w-4" />
+          </button>
+
+          <textarea
+            value={composerText}
+            onChange={(e) => setComposerText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmitComposer();
+              }
+            }}
+            rows={1}
+            placeholder={`Post in "${post.name}" as ${localAuthorName || "Local User"}… (Saves to *_edited.json)`}
+            className="max-h-32 min-h-[36px] flex-1 resize-y rounded-xl border border-slate-800 bg-slate-900/90 px-3.5 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+          />
+
+          <button
+            type="button"
+            disabled={
+              sending || (!composerText.trim() && stagedAttachPaths.length === 0)
+            }
+            onClick={handleSubmitComposer}
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 text-xs font-semibold text-white shadow-sm hover:bg-indigo-500 disabled:opacity-40 cursor-pointer disabled:cursor-default"
+          >
+            <Send className="h-3.5 w-3.5" />
+            <span>Send</span>
+          </button>
+        </div>
+      </footer>
     </main>
   );
 }

@@ -3,9 +3,15 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   Check,
   Copy,
+  CornerUpLeft,
   CornerUpRight,
   FolderOpen,
   Link2,
+  Paperclip,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
 } from "lucide-react";
 import type { AttachmentRef, Message, ServerBackup } from "../types/backup";
 import type { InternalServerTarget } from "../lib/links";
@@ -29,6 +35,13 @@ interface MessageCardProps {
   onOpenPdfModal?: (src: string, title: string, filePath?: string | null) => void;
   onOpenFileDefault?: (filePath: string) => void;
   onRevealInExplorer?: (filePath: string) => void;
+  onReplyMessage?: (message: Message) => void;
+  onEditMessage?: (
+    messageId: string,
+    newContent: string,
+    newAttachmentPaths: string[],
+  ) => Promise<void> | void;
+  onDeleteMessage?: (messageId: string) => Promise<void> | void;
 }
 
 const AVATAR_PALETTE = [
@@ -177,9 +190,17 @@ export function MessageCard({
   onOpenPdfModal,
   onOpenFileDefault,
   onRevealInExplorer,
+  onReplyMessage,
+  onEditMessage,
+  onDeleteMessage,
 }: MessageCardProps) {
   const [copiedText, setCopiedText] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState(message.content);
+  const [editAttPathInput, setEditAttPathInput] = useState("");
+  const [editAttPaths, setEditAttPaths] = useState<string[]>([]);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const authorName = message.author.name || "Unknown";
   const initial = (authorName[0] || "?").toUpperCase();
@@ -198,6 +219,26 @@ export function MessageCard({
     navigator.clipboard?.writeText(url);
     setCopiedLink(true);
     setTimeout(() => setCopiedLink(false), 1600);
+  };
+
+  const handleStartEdit = () => {
+    setEditDraft(message.content);
+    setEditAttPaths([]);
+    setEditAttPathInput("");
+    setIsEditing(true);
+  };
+
+  const handleAddEditAttachment = () => {
+    const p = editAttPathInput.trim();
+    if (!p) return;
+    setEditAttPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
+    setEditAttPathInput("");
+  };
+
+  const handleSaveEdit = async () => {
+    if (!onEditMessage) return;
+    await onEditMessage(message.id, editDraft, editAttPaths);
+    setIsEditing(false);
   };
 
   return (
@@ -248,6 +289,61 @@ export function MessageCard({
             </>
           )}
         </button>
+        {onReplyMessage && (
+          <button
+            type="button"
+            onClick={() => onReplyMessage(message)}
+            title="Reply to message"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+          >
+            <CornerUpLeft className="h-3 w-3" />
+            <span>Reply</span>
+          </button>
+        )}
+        {onEditMessage && (
+          <button
+            type="button"
+            onClick={handleStartEdit}
+            title="Edit message locally"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+          >
+            <Pencil className="h-3 w-3" />
+            <span>Edit</span>
+          </button>
+        )}
+        {onDeleteMessage && (
+          confirmingDelete ? (
+            <div className="inline-flex items-center gap-1 pl-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  onDeleteMessage(message.id);
+                }}
+                className="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-500 cursor-pointer"
+              >
+                Confirm
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                className="rounded px-1.5 py-0.5 text-[11px] text-slate-400 hover:text-white cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              title="Delete message locally"
+              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-rose-400 hover:bg-rose-500/20 hover:text-rose-200 cursor-pointer"
+            >
+              <Trash2 className="h-3 w-3" />
+              <span>Delete</span>
+            </button>
+          )
+        )}
       </div>
 
       {/* Reply Reference Header */}
@@ -314,13 +410,95 @@ export function MessageCard({
           </div>
 
           <div className="mt-1">
-            <RichContent
-              content={message.content}
-              backup={backup}
-              searchQuery={searchQuery}
-              onJumpToTarget={onJumpToTarget}
-              onOpenExternalUrl={onOpenExternalUrl}
-            />
+            {isEditing ? (
+              <div className="mt-1.5 space-y-2 rounded-xl border border-indigo-500/40 bg-slate-900/90 p-3">
+                <textarea
+                  value={editDraft}
+                  onChange={(e) => setEditDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setIsEditing(false);
+                    } else if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSaveEdit();
+                    }
+                  }}
+                  rows={3}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                />
+
+                {/* Optional local file attachment staging on edit */}
+                <div className="flex items-center gap-1.5">
+                  <Paperclip className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  <input
+                    type="text"
+                    value={editAttPathInput}
+                    onChange={(e) => setEditAttPathInput(e.target.value)}
+                    placeholder="Add local file path (optional)…"
+                    className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddEditAttachment}
+                    className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700 cursor-pointer"
+                  >
+                    <Plus className="h-3 w-3" />
+                    <span>Attach</span>
+                  </button>
+                </div>
+
+                {editAttPaths.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {editAttPaths.map((p) => (
+                      <span
+                        key={p}
+                        className="inline-flex items-center gap-1 rounded-md bg-indigo-500/15 px-2 py-0.5 text-[11px] text-indigo-200 ring-1 ring-indigo-500/30"
+                      >
+                        <span className="truncate max-w-xs">{p}</span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditAttPaths((prev) => prev.filter((x) => x !== p))
+                          }
+                          className="text-indigo-300 hover:text-white cursor-pointer"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span>Enter to save • Shift+Enter for newline • Esc to cancel</span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditing(false)}
+                      className="rounded-md px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveEdit}
+                      className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 cursor-pointer"
+                    >
+                      Save edit
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <RichContent
+                content={message.content}
+                backup={backup}
+                searchQuery={searchQuery}
+                onJumpToTarget={onJumpToTarget}
+                onOpenExternalUrl={onOpenExternalUrl}
+              />
+            )}
           </div>
 
           {message.attachments.length > 0 && (

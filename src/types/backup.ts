@@ -120,3 +120,11 @@ export interface AttachmentInspection {
   archive_entries: ArchiveEntryInfo[] | null;
 }
 
+export interface BackupMutationResult {
+  backup: ServerBackup;
+  saved_path: string;
+  active_post_id: string | null;
+  active_message_id: string | null;
+}
+
+
