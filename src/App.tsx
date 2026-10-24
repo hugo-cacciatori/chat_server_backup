@@ -541,7 +541,7 @@ export function App() {
         onClose={() =>
           setPdfModalState({ src: null, title: "", filePath: null })
         }
-        onOpenDefault={handleOpenFileDefault}
+        onOpenFileDefault={handleOpenFileDefault}
         onRevealInExplorer={handleRevealInExplorer}
       />
     </div>

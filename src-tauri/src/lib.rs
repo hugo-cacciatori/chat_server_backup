@@ -93,21 +93,31 @@ pub fn save_app_settings_to(settings: &AppSettings, path: &Path) -> Result<(), S
 
 pub fn default_history_dir() -> PathBuf {
     if let Ok(exe) = env::current_exe() {
-        if let Some(dir) = exe.parent() {
+        let mut cur = exe.parent();
+        while let Some(dir) = cur {
             let direct = dir.join("history");
             if direct.is_dir() {
                 return direct;
             }
+            let dev_ref = dir.join("reference").join("history");
+            if dev_ref.is_dir() {
+                return dev_ref;
+            }
+            cur = dir.parent();
         }
     }
     if let Ok(cwd) = env::current_dir() {
-        let direct = cwd.join("history");
-        if direct.is_dir() {
-            return direct;
-        }
-        let dev_ref = cwd.join("reference").join("history");
-        if dev_ref.is_dir() {
-            return dev_ref;
+        let mut cur = Some(cwd.as_path());
+        while let Some(dir) = cur {
+            let direct = dir.join("history");
+            if direct.is_dir() {
+                return direct;
+            }
+            let dev_ref = dir.join("reference").join("history");
+            if dev_ref.is_dir() {
+                return dev_ref;
+            }
+            cur = dir.parent();
         }
     }
     PathBuf::from("history")

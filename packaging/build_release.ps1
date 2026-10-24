@@ -15,15 +15,22 @@ if (-not (Test-Path "$IconsDir\icon.ico")) {
     python -c "from PIL import Image, ImageDraw; img = Image.new('RGBA', (256, 256), (30, 41, 59, 255)); d = ImageDraw.Draw(img); d.rounded_rectangle([32, 32, 224, 224], radius=40, fill=(99, 102, 241, 255)); d.rectangle([72, 88, 184, 112], fill=(255, 255, 255, 255)); d.rectangle([72, 132, 156, 156], fill=(224, 231, 255, 255)); img.save(r'$IconsDir\icon.png'); img.save(r'$IconsDir\icon.ico', sizes=[(256, 256), (64, 64), (32, 32), (16, 16)])"
 }
 
-Write-Output "Building frontend (Vite + React 19 + TypeScript)..."
-npm run build
-
-Write-Output "Building native Rust Tauri v2 release binary..."
-cargo build --release --manifest-path "$Root\src-tauri\Cargo.toml"
+Write-Output "Building frontend (Vite + React 19 + TypeScript) and native Rust Tauri v2 release binary..."
+npx tauri build --no-bundle
+if ($LASTEXITCODE -ne 0) {
+    throw "npx tauri build --no-bundle failed with exit code $LASTEXITCODE"
+}
 
 $BuiltExe = "$Root\src-tauri\target\release\chat_server_backup.exe"
 if (-not (Test-Path $BuiltExe)) {
     throw "Expected compiled executable not found at $BuiltExe"
+}
+
+# Verify that the production frontend assets are embedded in the binary (and not devUrl localhost:1420)
+$ExeBytes = [System.IO.File]::ReadAllBytes($BuiltExe)
+$ExeAscii = [System.Text.Encoding]::ASCII.GetString($ExeBytes)
+if (-not $ExeAscii.Contains("/assets/index-")) {
+    throw "Release binary verification failed: compiled frontend assets (/assets/index-*) were not embedded in $BuiltExe"
 }
 
 $ReleaseDir = "$Root\dist\v$Version"
