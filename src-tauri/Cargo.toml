@@ -1,0 +1,25 @@
+[package]
+name = "chat_server_backup"
+version = "0.2.0"
+description = "Local desktop mirror and non-destructive editor for chat server backups"
+authors = ["Hugo Cacciatori"]
+edition = "2021"
+
+[lib]
+name = "chat_server_backup_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,4 +1,9 @@
-# Virtual environment and Python artifacts
+# Node, Rust/Tauri, and Python artifacts
+node_modules/
+src-tauri/target/
+build-frontend/
+.vite/
+coverage/
 .venv/
 __pycache__/
 *.pyc

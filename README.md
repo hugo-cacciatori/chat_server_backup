@@ -1,6 +1,6 @@
 # ChatServerBackup
 
-A local desktop mirror and editor for exported chat server backups, built with Python 3.13 and PySide6.
+A local desktop mirror and non-destructive editor for exported chat server backups, built with **Tauri v2 (Rust + React 19 / TypeScript + Tailwind CSS)**.
 
 ## Features
 - **Full-fidelity local browsing:** Navigate server channels, forum channels, tag filters, threads, and chronological message streams offline.
