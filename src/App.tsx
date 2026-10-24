@@ -14,6 +14,7 @@ import {
 import { MessageStreamPane } from "./components/MessageStreamPane";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { LightboxModal } from "./components/LightboxModal";
+import { PdfReaderModal } from "./components/PdfReaderModal";
 
 interface NavHistoryEntry {
   channelId: string;
@@ -58,6 +59,11 @@ export function App() {
     caption: string;
     filePath?: string | null;
   }>({ src: null, caption: "", filePath: null });
+  const [pdfModalState, setPdfModalState] = useState<{
+    src: string | null;
+    title: string;
+    filePath?: string | null;
+  }>({ src: null, title: "", filePath: null });
 
   const pushHistory = useCallback(
     (channelId: string, postId: string, messageId: string | null = null) => {
@@ -351,6 +357,9 @@ export function App() {
         onOpenImageLightbox={(src, caption, filePath) =>
           setLightboxState({ src, caption, filePath })
         }
+        onOpenPdfModal={(src, title, filePath) =>
+          setPdfModalState({ src, title, filePath })
+        }
         onOpenFileDefault={handleOpenFileDefault}
         onRevealInExplorer={handleRevealInExplorer}
       />
@@ -373,6 +382,18 @@ export function App() {
         onClose={() =>
           setLightboxState({ src: null, caption: "", filePath: null })
         }
+        onRevealInExplorer={handleRevealInExplorer}
+      />
+
+      {/* Full-Viewport PDF Reader Modal */}
+      <PdfReaderModal
+        src={pdfModalState.src}
+        title={pdfModalState.title}
+        filePath={pdfModalState.filePath}
+        onClose={() =>
+          setPdfModalState({ src: null, title: "", filePath: null })
+        }
+        onOpenDefault={handleOpenFileDefault}
         onRevealInExplorer={handleRevealInExplorer}
       />
     </div>

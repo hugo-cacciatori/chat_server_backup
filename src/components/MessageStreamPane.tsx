@@ -28,6 +28,7 @@ interface MessageStreamPaneProps {
   onJumpToMessageInPost: (messageId: string) => void;
   onOpenExternalUrl: (url: string) => void;
   onOpenImageLightbox: (src: string, caption: string, filePath?: string | null) => void;
+  onOpenPdfModal: (src: string, title: string, filePath?: string | null) => void;
   onOpenFileDefault: (filePath: string) => void;
   onRevealInExplorer: (filePath: string) => void;
 }
@@ -60,6 +61,7 @@ export function MessageStreamPane({
   onJumpToMessageInPost,
   onOpenExternalUrl,
   onOpenImageLightbox,
+  onOpenPdfModal,
   onOpenFileDefault,
   onRevealInExplorer,
 }: MessageStreamPaneProps) {
@@ -254,6 +256,7 @@ export function MessageStreamPane({
                   onJumpToMessageInPost={onJumpToMessageInPost}
                   onOpenExternalUrl={onOpenExternalUrl}
                   onOpenImageLightbox={onOpenImageLightbox}
+                  onOpenPdfModal={onOpenPdfModal}
                   onOpenFileDefault={onOpenFileDefault}
                   onRevealInExplorer={onRevealInExplorer}
                 />

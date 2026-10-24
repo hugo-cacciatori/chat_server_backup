@@ -3,6 +3,11 @@ import { parseMarkdownBlocks, tokenizeCodeLine } from "../src/lib/markdown";
 import { parseInternalChannelUrl, resolveTargetInBackup } from "../src/lib/links";
 import { filterAndSortPosts } from "../src/components/PostListPane";
 import { searchAcrossBackup } from "../src/components/GlobalSearchModal";
+import { cleanDisplayFilename } from "../src/components/MessageCard";
+import {
+  formatByteSize,
+  formatDurationSeconds,
+} from "../src/components/MediaCards";
 import type { ServerBackup } from "../src/types/backup";
 
 const sampleBackup: ServerBackup = {
@@ -170,5 +175,22 @@ describe("Internal Target Resolution & Post Filtering", () => {
     const byFilename = searchAcrossBackup(sampleBackup, "1_spec.pdf");
     expect(byFilename).toHaveLength(1);
     expect(byFilename[0].postId).toBe("post_1");
+  });
+});
+
+describe("Media & Document Formatting Helpers", () => {
+  it("strips numeric ID prefixes from exported asset filenames", () => {
+    expect(cleanDisplayFilename("1488296472926945421_mix_master.flac")).toBe(
+      "mix_master.flac",
+    );
+    expect(cleanDisplayFilename("notes.docx")).toBe("notes.docx");
+  });
+
+  it("formats byte sizes and audio durations cleanly", () => {
+    expect(formatByteSize(512)).toBe("512 B");
+    expect(formatByteSize(2048)).toBe("2.0 KB");
+    expect(formatByteSize(5 * 1024 * 1024)).toBe("5.00 MB");
+    expect(formatDurationSeconds(0)).toBe("0:00");
+    expect(formatDurationSeconds(125)).toBe("2:05");
   });
 });

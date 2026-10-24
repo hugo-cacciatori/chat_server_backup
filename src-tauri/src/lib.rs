@@ -1,5 +1,6 @@
 pub mod loader;
 pub mod model;
+pub mod previews;
 pub mod storage;
 
 use std::env;
@@ -9,6 +10,7 @@ use std::process::Command;
 
 use loader::{discover_backups, load_backup};
 use model::{BackupDescriptor, ServerBackup};
+use previews::{inspect_attachment_file, AttachmentInspection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +136,11 @@ fn load_backup_command(
 }
 
 #[tauri::command]
+fn inspect_attachment(path: String) -> Result<AttachmentInspection, String> {
+    inspect_attachment_file(Path::new(&path))
+}
+
+#[tauri::command]
 fn open_path_in_os(path: String, reveal_in_folder: bool) -> Result<(), String> {
     let target = Path::new(&path);
     if !target.exists() {
@@ -174,6 +181,7 @@ pub fn run() {
             set_backup_root,
             list_discovered_backups,
             load_backup_command,
+            inspect_attachment,
             open_path_in_os,
             open_external_url
         ])
@@ -608,5 +616,45 @@ mod tests {
         let loaded = load_app_settings_from(&s_file);
         assert_eq!(loaded.backup_root, "custom/history");
         assert_eq!(loaded.local_author_name, "Hugo");
+    }
+
+    #[test]
+    fn test_inspect_attachments_and_reference_assets() {
+        let tmp = TempDir::new().unwrap();
+        let py_file = tmp.path().join("example.py");
+        fs::write(&py_file, "def add(a, b):\n    return a + b\n").unwrap();
+        let py_info = inspect_attachment_file(&py_file).unwrap();
+        assert_eq!(py_info.kind, "text");
+        let tp = py_info.text_preview.unwrap();
+        assert_eq!(tp.language, "python");
+        assert_eq!(tp.total_lines, 2);
+
+        let assets_dir = repo_root()
+            .join("reference")
+            .join("history")
+            .join("2026-10-20")
+            .join("assets_2026-10-20");
+        if !assets_dir.is_dir() {
+            return;
+        }
+
+        // Verify .docx extraction on real backup file
+        let docx_file =
+            assets_dir.join("1544167728271593492_1541951031477538958_LettreRecommandation1.docx");
+        if docx_file.is_file() {
+            let docx_info = inspect_attachment_file(&docx_file).unwrap();
+            assert_eq!(docx_info.kind, "docx");
+            let dp = docx_info.docx_preview.unwrap();
+            assert!(!dp.paragraphs.is_empty());
+        }
+
+        // Verify .7z archive listing on real backup file
+        let sevenz_file = assets_dir.join("1544167740594462770_1541951357186215988_docs1.7z");
+        if sevenz_file.is_file() {
+            let sz_info = inspect_attachment_file(&sevenz_file).unwrap();
+            assert_eq!(sz_info.kind, "archive");
+            let entries = sz_info.archive_entries.unwrap();
+            assert!(!entries.is_empty());
+        }
     }
 }

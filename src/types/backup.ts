@@ -92,3 +92,31 @@ export interface ServerBackup {
   schema_version: number;
   channels: Channel[];
 }
+
+export interface TextPreview {
+  content: string;
+  total_lines: number;
+  truncated: boolean;
+  language: string;
+}
+
+export interface DocxPreview {
+  paragraphs: string[];
+  total_paragraphs: number;
+}
+
+export interface ArchiveEntryInfo {
+  path: string;
+  uncompressed_size: number;
+  is_dir: boolean;
+}
+
+export interface AttachmentInspection {
+  file_size: number;
+  extension: string;
+  kind: "text" | "docx" | "archive" | "pdf" | "binary" | string;
+  text_preview: TextPreview | null;
+  docx_preview: DocxPreview | null;
+  archive_entries: ArchiveEntryInfo[] | null;
+}
+

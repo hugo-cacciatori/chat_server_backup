@@ -4,20 +4,15 @@ import {
   Check,
   Copy,
   CornerUpRight,
-  ExternalLink,
-  FileArchive,
-  FileCode,
-  FileSpreadsheet,
-  FileText,
   FolderOpen,
   Link2,
-  Music,
-  Video,
 } from "lucide-react";
 import type { AttachmentRef, Message, ServerBackup } from "../types/backup";
 import type { InternalServerTarget } from "../lib/links";
 import { RichContent } from "./RichContent";
 import { EmbedCard } from "./EmbedCard";
+import { AudioAttachmentCard, VideoAttachmentCard } from "./MediaCards";
+import { DocumentAttachmentCard } from "./DocumentCards";
 
 interface MessageCardProps {
   message: Message;
@@ -31,6 +26,7 @@ interface MessageCardProps {
   onJumpToMessageInPost?: (messageId: string) => void;
   onOpenExternalUrl?: (url: string) => void;
   onOpenImageLightbox?: (src: string, caption: string, filePath?: string | null) => void;
+  onOpenPdfModal?: (src: string, title: string, filePath?: string | null) => void;
   onOpenFileDefault?: (filePath: string) => void;
   onRevealInExplorer?: (filePath: string) => void;
 }
@@ -48,28 +44,6 @@ const AVATAR_PALETTE = [
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "mkv"]);
 const AUDIO_EXTENSIONS = new Set(["mp3", "flac", "wav", "ogg", "m4a"]);
-const CODE_EXTENSIONS = new Set([
-  "py",
-  "tex",
-  "txt",
-  "md",
-  "json",
-  "js",
-  "ts",
-  "tsx",
-  "rs",
-  "html",
-  "css",
-  "yaml",
-  "yml",
-  "toml",
-  "sh",
-  "ps1",
-  "bat",
-  "log",
-  "csv",
-]);
-const ARCHIVE_EXTENSIONS = new Set(["7z", "zip", "rar", "tar", "gz"]);
 
 function getAvatarColorClass(idOrName: string): string {
   let hash = 0;
@@ -92,8 +66,7 @@ export function formatMessageTimestamp(iso: string): string {
   });
 }
 
-function cleanDisplayFilename(filename: string): string {
-  // Strip leading numeric snowflake prefix(es) e.g. "1544167728271593492_1541951031477538958_Lettre.docx"
+export function cleanDisplayFilename(filename: string): string {
   return filename.replace(/^(?:\d+_)+/, "") || filename;
 }
 
@@ -109,11 +82,13 @@ function toAssetUrl(resolvedPath: string | null): string {
 function AttachmentItem({
   att,
   onOpenImageLightbox,
+  onOpenPdfModal,
   onOpenFileDefault,
   onRevealInExplorer,
 }: {
   att: AttachmentRef;
   onOpenImageLightbox?: (src: string, caption: string, filePath?: string | null) => void;
+  onOpenPdfModal?: (src: string, title: string, filePath?: string | null) => void;
   onOpenFileDefault?: (filePath: string) => void;
   onRevealInExplorer?: (filePath: string) => void;
 }) {
@@ -123,7 +98,7 @@ function AttachmentItem({
 
   if (IMAGE_EXTENSIONS.has(ext) && att.exists && assetUrl) {
     return (
-      <div className="mt-2 inline-block max-w-lg overflow-hidden rounded-lg border border-slate-800 bg-slate-900/70 shadow-sm">
+      <div className="mt-2 inline-block max-w-lg overflow-hidden rounded-xl border border-slate-800 bg-slate-900/75 shadow-sm">
         <div className="flex items-center justify-between gap-3 border-b border-slate-800/80 px-3 py-1.5 text-xs text-slate-300">
           <span className="truncate font-medium" title={att.filename}>
             {displayName}
@@ -153,123 +128,37 @@ function AttachmentItem({
 
   if (VIDEO_EXTENSIONS.has(ext) && att.exists && assetUrl) {
     return (
-      <div className="mt-2 max-w-xl overflow-hidden rounded-lg border border-slate-800 bg-slate-900/80 p-2.5 shadow-sm">
-        <div className="mb-2 flex items-center justify-between gap-2 text-xs text-slate-300">
-          <span className="inline-flex items-center gap-1.5 truncate font-medium">
-            <Video className="h-4 w-4 text-indigo-400 shrink-0" />
-            <span className="truncate">{displayName}</span>
-          </span>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] uppercase text-slate-300">
-              {ext}
-            </span>
-            {att.resolved_path && onRevealInExplorer && (
-              <button
-                type="button"
-                onClick={() => onRevealInExplorer(att.resolved_path!)}
-                title="Show in Explorer"
-                className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-        <video
-          controls
-          preload="metadata"
-          src={assetUrl}
-          className="max-h-80 w-full rounded bg-slate-950"
-        />
-      </div>
+      <VideoAttachmentCard
+        att={att}
+        displayName={displayName}
+        assetUrl={assetUrl}
+        onOpenFileDefault={onOpenFileDefault}
+        onRevealInExplorer={onRevealInExplorer}
+      />
     );
   }
 
   if (AUDIO_EXTENSIONS.has(ext) && att.exists && assetUrl) {
     return (
-      <div className="mt-2 max-w-md rounded-lg border border-slate-800 bg-slate-900/80 p-3 shadow-sm">
-        <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-          <span className="inline-flex items-center gap-1.5 truncate font-medium text-slate-200">
-            <Music className="h-4 w-4 text-emerald-400 shrink-0" />
-            <span className="truncate" title={att.filename}>
-              {displayName}
-            </span>
-          </span>
-          <div className="flex items-center gap-1.5 shrink-0">
-            <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase text-emerald-300 ring-1 ring-emerald-500/30">
-              {ext}
-            </span>
-            {att.resolved_path && onRevealInExplorer && (
-              <button
-                type="button"
-                onClick={() => onRevealInExplorer(att.resolved_path!)}
-                title="Show in Explorer"
-                className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-        <audio controls preload="metadata" src={assetUrl} className="h-9 w-full" />
-      </div>
+      <AudioAttachmentCard
+        att={att}
+        displayName={displayName}
+        assetUrl={assetUrl}
+        onOpenFileDefault={onOpenFileDefault}
+        onRevealInExplorer={onRevealInExplorer}
+      />
     );
   }
 
-  const FileIcon = ARCHIVE_EXTENSIONS.has(ext)
-    ? FileArchive
-    : CODE_EXTENSIONS.has(ext)
-      ? FileCode
-      : ext === "pdf" || ext === "docx"
-        ? FileText
-        : FileSpreadsheet;
-
   return (
-    <div className="mt-2 flex max-w-lg items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-900/75 px-3.5 py-2.5 text-xs shadow-sm">
-      <div className="flex min-w-0 items-center gap-2.5">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-500/30">
-          <FileIcon className="h-4 w-4" />
-        </div>
-        <div className="min-w-0">
-          <div className="truncate font-medium text-slate-100" title={att.filename}>
-            {displayName}
-          </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-400">
-            <span className="font-mono uppercase">{ext || "file"}</span>
-            <span>•</span>
-            <span className={att.exists ? "text-emerald-400" : "text-rose-400"}>
-              {att.exists ? "Local asset available" : "Missing on disk"}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {att.exists && att.resolved_path && (
-        <div className="flex shrink-0 items-center gap-1.5">
-          {onOpenFileDefault && (
-            <button
-              type="button"
-              onClick={() => onOpenFileDefault(att.resolved_path!)}
-              title="Open in default application"
-              className="inline-flex items-center gap-1 rounded-md bg-indigo-600/90 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500 transition-colors cursor-pointer"
-            >
-              <ExternalLink className="h-3.5 w-3.5" />
-              <span>Open</span>
-            </button>
-          )}
-          {onRevealInExplorer && (
-            <button
-              type="button"
-              onClick={() => onRevealInExplorer(att.resolved_path!)}
-              title="Show in Explorer"
-              className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-slate-200 hover:bg-slate-700 transition-colors cursor-pointer"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      )}
-    </div>
+    <DocumentAttachmentCard
+      att={att}
+      displayName={displayName}
+      assetUrl={assetUrl}
+      onOpenPdfModal={onOpenPdfModal}
+      onOpenFileDefault={onOpenFileDefault}
+      onRevealInExplorer={onRevealInExplorer}
+    />
   );
 }
 
@@ -285,6 +174,7 @@ export function MessageCard({
   onJumpToMessageInPost,
   onOpenExternalUrl,
   onOpenImageLightbox,
+  onOpenPdfModal,
   onOpenFileDefault,
   onRevealInExplorer,
 }: MessageCardProps) {
@@ -440,6 +330,7 @@ export function MessageCard({
                   key={`${att.relative_path}-${idx}`}
                   att={att}
                   onOpenImageLightbox={onOpenImageLightbox}
+                  onOpenPdfModal={onOpenPdfModal}
                   onOpenFileDefault={onOpenFileDefault}
                   onRevealInExplorer={onRevealInExplorer}
                 />
