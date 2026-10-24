@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import {
   Check,
   ExternalLink,
+  Eye,
+  EyeOff,
   FolderOpen,
   FolderSearch,
   History,
+  KeyRound,
   RotateCcw,
   Settings,
   Trash2,
@@ -18,6 +21,7 @@ interface SettingsModalProps {
   recentBackupRoots: string[];
   localAuthorName: string;
   localAuthorId: string;
+  botToken?: string;
   snapshotCount: number;
   onClose: () => void;
   onBrowseBackupRoot: () => Promise<void> | void;
@@ -25,6 +29,7 @@ interface SettingsModalProps {
   onRemoveRecentBackupRoot?: (folderPath: string) => void;
   onOpenFolderInExplorer?: (folderPath: string) => void;
   onSaveAuthorProfile: (authorName: string, authorId: string) => void;
+  onSaveBotToken?: (token: string) => Promise<void> | void;
 }
 
 export function SettingsModal({
@@ -33,6 +38,7 @@ export function SettingsModal({
   recentBackupRoots,
   localAuthorName,
   localAuthorId,
+  botToken = "",
   snapshotCount,
   onClose,
   onBrowseBackupRoot,
@@ -40,18 +46,23 @@ export function SettingsModal({
   onRemoveRecentBackupRoot,
   onOpenFolderInExplorer,
   onSaveAuthorProfile,
+  onSaveBotToken,
 }: SettingsModalProps) {
   const [folderInput, setFolderInput] = useState(backupRootPath);
   const [authorNameInput, setAuthorNameInput] = useState(localAuthorName);
   const [authorIdInput, setAuthorIdInput] = useState(localAuthorId);
+  const [botTokenInput, setBotTokenInput] = useState(botToken);
+  const [showBotToken, setShowBotToken] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setFolderInput(backupRootPath);
       setAuthorNameInput(localAuthorName);
       setAuthorIdInput(localAuthorId);
+      setBotTokenInput(botToken);
+      setShowBotToken(false);
     }
-  }, [isOpen, backupRootPath, localAuthorName, localAuthorId]);
+  }, [isOpen, backupRootPath, localAuthorName, localAuthorId, botToken]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -83,7 +94,17 @@ export function SettingsModal({
         authorIdInput.trim() || "local-user-1",
       );
     }
+    if (onSaveBotToken && botTokenInput.trim() !== botToken.trim()) {
+      void onSaveBotToken(botTokenInput.trim());
+    }
     onClose();
+  };
+
+  const handleApplyTokenSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (onSaveBotToken) {
+      void onSaveBotToken(botTokenInput.trim());
+    }
   };
 
   return (
@@ -271,6 +292,70 @@ export function SettingsModal({
               </div>
             </section>
           )}
+
+          {/* Export Bot Token Section */}
+          <section className="space-y-2.5 border-t border-slate-800/80 pt-4">
+            <div className="flex items-center justify-between">
+              <label
+                htmlFor="settings-bot-token-input"
+                className="flex items-center gap-1.5 text-xs font-semibold text-slate-200"
+              >
+                <KeyRound className="h-3.5 w-3.5 text-indigo-400" />
+                <span>Export Bot Token</span>
+              </label>
+              {botTokenInput.trim() ? (
+                <span className="rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30">
+                  Token Configured
+                </span>
+              ) : (
+                <span className="rounded-full bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-medium text-amber-300 ring-1 ring-amber-500/30">
+                  No Token Set
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] leading-relaxed text-slate-400">
+              Stored strictly on your PC inside{" "}
+              <code className="rounded bg-slate-800 px-1 py-0.5 text-slate-200">
+                %LOCALAPPDATA%\ChatServerBackup\settings.json
+              </code>{" "}
+              and passed via process environment variables when launching the
+              exporter bot from the sidebar.
+            </p>
+            <form onSubmit={handleApplyTokenSubmit} className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  id="settings-bot-token-input"
+                  aria-label="Export bot token"
+                  type={showBotToken ? "text" : "password"}
+                  value={botTokenInput}
+                  onChange={(e) => setBotTokenInput(e.target.value)}
+                  placeholder="Paste your bot token here…"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 py-2 pl-3 pr-9 font-mono text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowBotToken((v) => !v)}
+                  title={showBotToken ? "Hide token" : "Reveal token"}
+                  aria-label={showBotToken ? "Hide token" : "Reveal token"}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-200 cursor-pointer"
+                >
+                  {showBotToken ? (
+                    <EyeOff className="h-3.5 w-3.5" />
+                  ) : (
+                    <Eye className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+              {onSaveBotToken && (
+                <button
+                  type="submit"
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700 hover:text-white transition-colors cursor-pointer"
+                >
+                  Save Token
+                </button>
+              )}
+            </form>
+          </section>
 
           {/* Local Author Profile Section */}
           <section className="space-y-3 border-t border-slate-800/80 pt-4">

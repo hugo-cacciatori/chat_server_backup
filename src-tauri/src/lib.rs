@@ -5,8 +5,14 @@ pub mod storage;
 
 use std::env;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 use loader::{discover_backups, load_backup};
 use model::{Author, BackupDescriptor, ServerBackup};
@@ -52,6 +58,8 @@ pub struct AppSettings {
     pub local_author_name: String,
     #[serde(default = "default_author_id")]
     pub local_author_id: String,
+    #[serde(default)]
+    pub bot_token: String,
 }
 
 fn default_author_name() -> String {
@@ -69,8 +77,191 @@ impl Default for AppSettings {
             recent_backup_roots: Vec::new(),
             local_author_name: default_author_name(),
             local_author_id: default_author_id(),
+            bot_token: String::new(),
         }
     }
+}
+
+const EMBEDDED_EXPORT_BOT_PY: &str = include_str!("../../bot/export_bot.py");
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BotRuntimeStatus {
+    /// "stopped" | "starting" | "connected" | "exporting" | "completed" | "error"
+    pub state: String,
+    pub status_text: String,
+    pub bot_username: Option<String>,
+    pub completed_exports: u32,
+    pub last_export_path: Option<String>,
+    pub last_error: Option<String>,
+    pub has_token_configured: bool,
+}
+
+impl Default for BotRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            state: "stopped".to_string(),
+            status_text: "Bot stopped".to_string(),
+            bot_username: None,
+            completed_exports: 0,
+            last_export_path: None,
+            last_error: None,
+            has_token_configured: false,
+        }
+    }
+}
+
+struct BotProcessManager {
+    child: Option<Child>,
+    run_id: u64,
+    status: BotRuntimeStatus,
+}
+
+fn bot_manager() -> &'static Mutex<BotProcessManager> {
+    static MANAGER: OnceLock<Mutex<BotProcessManager>> = OnceLock::new();
+    MANAGER.get_or_init(|| {
+        Mutex::new(BotProcessManager {
+            child: None,
+            run_id: 0,
+            status: BotRuntimeStatus::default(),
+        })
+    })
+}
+
+pub fn apply_bot_output_line(status: &mut BotRuntimeStatus, raw_line: &str) {
+    let line = raw_line.trim();
+    if line.is_empty() {
+        return;
+    }
+
+    if let Some(user) = line.strip_prefix("Logged in as ") {
+        let username = user.trim().to_string();
+        status.state = "connected".to_string();
+        status.bot_username = Some(username.clone());
+        status.status_text = format!("Connected as {username} — ready for !export");
+        status.last_error = None;
+    } else if let Some(progress) = line.strip_prefix("[EXPORT_PROGRESS]") {
+        let msg = progress.trim();
+        status.state = "exporting".to_string();
+        status.status_text = if msg.is_empty() {
+            "Exporting server backup…".to_string()
+        } else {
+            msg.to_string()
+        };
+    } else if let Some(done) = line.strip_prefix("[EXPORT_COMPLETE]") {
+        let detail = done.trim();
+        let saved_path = detail.strip_prefix("Saved to ").unwrap_or(detail).trim();
+        status.state = "completed".to_string();
+        status.completed_exports += 1;
+        if !saved_path.is_empty() {
+            status.last_export_path = Some(saved_path.to_string());
+        }
+        status.status_text = "Export complete! Ready for !export".to_string();
+        status.last_error = None;
+    } else if line.starts_with("Error:")
+        || line.contains("Improper token")
+        || line.contains("LoginFailure")
+        || line.contains("PrivilegedIntentsRequired")
+    {
+        status.state = "error".to_string();
+        status.last_error = Some(line.to_string());
+        status.status_text = line.to_string();
+    }
+}
+
+fn read_token_from_env_file(env_path: &Path) -> Option<String> {
+    let content = fs::read_to_string(env_path).ok()?;
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') || !line.contains('=') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == "CHAT_BACKUP_BOT_TOKEN" {
+                let cleaned = v.trim().trim_matches('\'').trim_matches('"').trim();
+                if !cleaned.is_empty() {
+                    return Some(cleaned.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn resolve_effective_bot_token(cfg: &AppSettings) -> String {
+    if !cfg.bot_token.trim().is_empty() {
+        return cfg.bot_token.trim().to_string();
+    }
+    if let Ok(env_tok) = env::var("CHAT_BACKUP_BOT_TOKEN") {
+        if !env_tok.trim().is_empty() {
+            return env_tok.trim().to_string();
+        }
+    }
+    let mut env_candidates = Vec::new();
+    if !cfg.backup_root.trim().is_empty() {
+        let root_path = Path::new(cfg.backup_root.trim());
+        env_candidates.push(root_path.join(".env"));
+        if let Some(parent) = root_path.parent() {
+            env_candidates.push(parent.join(".env"));
+        }
+    }
+    if let Ok(exe) = env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            env_candidates.push(dir.join(".env"));
+        }
+    }
+    if let Ok(cwd) = env::current_dir() {
+        env_candidates.push(cwd.join(".env"));
+    }
+    for candidate in env_candidates {
+        if let Some(tok) = read_token_from_env_file(&candidate) {
+            return tok;
+        }
+    }
+    String::new()
+}
+
+fn resolve_or_extract_bot_script(backup_root: &str) -> Result<PathBuf, String> {
+    let mut candidates = Vec::new();
+    if !backup_root.trim().is_empty() {
+        let root_path = Path::new(backup_root.trim());
+        if let Some(parent) = root_path.parent() {
+            candidates.push(parent.join("export_bot.py"));
+            candidates.push(parent.join("bot").join("export_bot.py"));
+        }
+    }
+    if let Ok(exe) = env::current_exe() {
+        let mut cur = exe.parent();
+        while let Some(dir) = cur {
+            candidates.push(dir.join("export_bot.py"));
+            candidates.push(dir.join("bot").join("export_bot.py"));
+            cur = dir.parent();
+        }
+    }
+    if let Ok(cwd) = env::current_dir() {
+        let mut cur = Some(cwd.as_path());
+        while let Some(dir) = cur {
+            candidates.push(dir.join("bot").join("export_bot.py"));
+            candidates.push(dir.join("export_bot.py"));
+            cur = dir.parent();
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    // Fallback: materialize the embedded export_bot.py next to settings.json
+    let fallback_path = settings_file_path()
+        .parent()
+        .map(|p| p.join("export_bot.py"))
+        .unwrap_or_else(|| PathBuf::from("export_bot.py"));
+    if let Some(parent) = fallback_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&fallback_path, EMBEDDED_EXPORT_BOT_PY).map_err(|e| e.to_string())?;
+    Ok(fallback_path)
 }
 
 pub fn push_recent_backup_root(cfg: &mut AppSettings, new_root: &str) {
@@ -152,7 +343,175 @@ fn get_app_settings() -> AppSettings {
         let root_copy = cfg.backup_root.clone();
         push_recent_backup_root(&mut cfg, &root_copy);
     }
+    if cfg.bot_token.trim().is_empty() {
+        cfg.bot_token = resolve_effective_bot_token(&cfg);
+    }
     cfg
+}
+
+#[tauri::command]
+fn set_bot_token(bot_token: String) -> Result<AppSettings, String> {
+    let s_path = settings_file_path();
+    let mut cfg = load_app_settings_from(&s_path);
+    cfg.bot_token = bot_token.trim().to_string();
+    save_app_settings_to(&cfg, &s_path)?;
+    if cfg.backup_root.is_empty() {
+        cfg.backup_root = default_history_dir().to_string_lossy().to_string();
+    }
+    Ok(cfg)
+}
+
+#[tauri::command]
+fn get_export_bot_status() -> BotRuntimeStatus {
+    let cfg = get_app_settings();
+    let has_tok = !resolve_effective_bot_token(&cfg).is_empty();
+    let mut guard = bot_manager().lock().unwrap();
+    guard.status.has_token_configured = has_tok;
+    guard.status.clone()
+}
+
+#[tauri::command]
+fn stop_export_bot() -> Result<BotRuntimeStatus, String> {
+    let cfg = get_app_settings();
+    let has_tok = !resolve_effective_bot_token(&cfg).is_empty();
+    let mut guard = bot_manager().lock().unwrap();
+    guard.run_id += 1;
+    if let Some(mut child) = guard.child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    guard.status.state = "stopped".to_string();
+    guard.status.status_text = "Bot stopped".to_string();
+    guard.status.bot_username = None;
+    guard.status.has_token_configured = has_tok;
+    Ok(guard.status.clone())
+}
+
+#[tauri::command]
+fn start_export_bot() -> Result<BotRuntimeStatus, String> {
+    let cfg = get_app_settings();
+    let token = resolve_effective_bot_token(&cfg);
+    if token.is_empty() {
+        return Err(
+            "No Export Bot token configured. Enter your bot token in Settings (Ctrl+,)."
+                .to_string(),
+        );
+    }
+
+    let history_dir = if cfg.backup_root.trim().is_empty() {
+        default_history_dir()
+    } else {
+        PathBuf::from(cfg.backup_root.trim())
+    };
+    let script_path = resolve_or_extract_bot_script(&cfg.backup_root)?;
+
+    let mut guard = bot_manager().lock().unwrap();
+    if let Some(mut prev_child) = guard.child.take() {
+        let _ = prev_child.kill();
+        let _ = prev_child.wait();
+    }
+
+    guard.run_id += 1;
+    let current_run_id = guard.run_id;
+
+    let mut cmd = Command::new("python");
+    cmd.args(["-u", &script_path.to_string_lossy()])
+        .env("CHAT_BACKUP_BOT_TOKEN", &token)
+        .env(
+            "CHAT_BACKUP_HISTORY_DIR",
+            history_dir.to_string_lossy().to_string(),
+        )
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = cmd.spawn().map_err(|e| {
+        let msg = format!("Failed to start python export_bot.py: {e}");
+        guard.status.state = "error".to_string();
+        guard.status.status_text = msg.clone();
+        guard.status.last_error = Some(msg.clone());
+        msg
+    })?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    guard.status = BotRuntimeStatus {
+        state: "starting".to_string(),
+        status_text: "Starting export bot & connecting…".to_string(),
+        bot_username: None,
+        completed_exports: guard.status.completed_exports,
+        last_export_path: guard.status.last_export_path.clone(),
+        last_error: None,
+        has_token_configured: true,
+    };
+    guard.child = Some(child);
+    let initial_status = guard.status.clone();
+    drop(guard);
+
+    if let Some(out) = stdout {
+        thread::spawn(move || {
+            let reader = BufReader::new(out);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut mgr = bot_manager().lock().unwrap();
+                if mgr.run_id != current_run_id {
+                    break;
+                }
+                apply_bot_output_line(&mut mgr.status, &line);
+            }
+        });
+    }
+
+    if let Some(err) = stderr {
+        thread::spawn(move || {
+            let reader = BufReader::new(err);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut mgr = bot_manager().lock().unwrap();
+                if mgr.run_id != current_run_id {
+                    break;
+                }
+                apply_bot_output_line(&mut mgr.status, &line);
+            }
+        });
+    }
+
+    // Monitor child exit status
+    thread::spawn(move || loop {
+        thread::sleep(std::time::Duration::from_millis(400));
+        let mut mgr = bot_manager().lock().unwrap();
+        if mgr.run_id != current_run_id {
+            break;
+        }
+        let exited = match mgr.child.as_mut() {
+            Some(c) => c.try_wait().ok().flatten(),
+            None => break,
+        };
+        if let Some(exit_status) = exited {
+            mgr.child = None;
+            if mgr.status.state != "error" {
+                if exit_status.success() {
+                    mgr.status.state = "stopped".to_string();
+                    mgr.status.status_text = "Bot stopped".to_string();
+                } else {
+                    mgr.status.state = "error".to_string();
+                    let err_msg = mgr.status.last_error.clone().unwrap_or_else(|| {
+                        format!("Bot process exited ({exit_status}). Check token and network.")
+                    });
+                    mgr.status.status_text = err_msg.clone();
+                    mgr.status.last_error = Some(err_msg);
+                }
+            }
+            break;
+        }
+    });
+
+    Ok(initial_status)
 }
 
 #[tauri::command]
@@ -485,6 +844,10 @@ pub fn run() {
             remove_recent_backup_root,
             pick_backup_folder,
             set_local_author_profile,
+            set_bot_token,
+            get_export_bot_status,
+            start_export_bot,
+            stop_export_bot,
             list_discovered_backups,
             load_backup_command,
             inspect_attachment,
@@ -498,8 +861,13 @@ pub fn run() {
             open_path_in_os,
             open_external_url
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running ChatServerBackup application");
+        .build(tauri::generate_context!())
+        .expect("error while building ChatServerBackup application")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                let _ = stop_export_bot();
+            }
+        });
 }
 
 #[cfg(test)]
@@ -994,11 +1362,46 @@ mod tests {
             recent_backup_roots: vec!["custom/history".to_string()],
             local_author_name: "Hugo".to_string(),
             local_author_id: "u1".to_string(),
+            bot_token: "tok_test_123".to_string(),
         };
         save_app_settings_to(&cfg, &s_file).unwrap();
         let loaded = load_app_settings_from(&s_file);
         assert_eq!(loaded.backup_root, "custom/history");
         assert_eq!(loaded.local_author_name, "Hugo");
+        assert_eq!(loaded.bot_token, "tok_test_123");
+    }
+
+    #[test]
+    fn test_bot_output_line_status_transitions() {
+        let mut status = BotRuntimeStatus::default();
+        assert_eq!(status.state, "stopped");
+
+        apply_bot_output_line(&mut status, "Logged in as ArchiveBot#4821");
+        assert_eq!(status.state, "connected");
+        assert_eq!(status.bot_username.as_deref(), Some("ArchiveBot#4821"));
+        assert!(status.status_text.contains("ArchiveBot#4821"));
+
+        apply_bot_output_line(
+            &mut status,
+            "[EXPORT_PROGRESS] Exporting forum #memory-manager…",
+        );
+        assert_eq!(status.state, "exporting");
+        assert_eq!(status.status_text, "Exporting forum #memory-manager…");
+
+        apply_bot_output_line(
+            &mut status,
+            "[EXPORT_COMPLETE] Saved to F:\\backups\\history\\2026-10-24\\server_export_2026-10-24.json",
+        );
+        assert_eq!(status.state, "completed");
+        assert_eq!(status.completed_exports, 1);
+        assert_eq!(
+            status.last_export_path.as_deref(),
+            Some("F:\\backups\\history\\2026-10-24\\server_export_2026-10-24.json")
+        );
+
+        apply_bot_output_line(&mut status, "Error: Improper token has been passed.");
+        assert_eq!(status.state, "error");
+        assert!(status.last_error.is_some());
     }
 
     #[test]

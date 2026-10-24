@@ -168,7 +168,7 @@ async def process_thread(
 
 @bot.event
 async def on_ready() -> None:
-    print(f"Logged in as {bot.user}")
+    print(f"Logged in as {bot.user}", flush=True)
 
 
 @bot.command()
@@ -188,6 +188,10 @@ async def export(ctx: commands.Context[Any]) -> None:
     export_file = export_dir / f"server_export_{date_str}.json"
     assets_dir = export_dir / f"assets_{date_str}"
 
+    print(
+        f"[EXPORT_PROGRESS] Starting export for {ctx.guild.name} ({date_str})…",
+        flush=True,
+    )
     await ctx.send(f"Starting full server export for `{date_str}`…")
 
     export_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +214,7 @@ async def export(ctx: commands.Context[Any]) -> None:
         position = int(getattr(channel, "position", 0))
 
         if isinstance(channel, discord.ForumChannel):
+            print(f"[EXPORT_PROGRESS] Exporting forum #{channel.name}…", flush=True)
             available_tags = [
                 {
                     "id": str(tag.id),
@@ -239,6 +244,7 @@ async def export(ctx: commands.Context[Any]) -> None:
             )
 
         elif isinstance(channel, discord.TextChannel):
+            print(f"[EXPORT_PROGRESS] Exporting channel #{channel.name}…", flush=True)
             direct_messages: list[dict[str, Any]] = []
             async for message in channel.history(limit=None, oldest_first=True):
                 direct_messages.append(
@@ -277,6 +283,7 @@ async def export(ctx: commands.Context[Any]) -> None:
     async with aiofiles.open(export_file, "w", encoding="utf-8") as f:
         await f.write(json.dumps(server_data, indent=2, ensure_ascii=False))
 
+    print(f"[EXPORT_COMPLETE] Saved to {export_file}", flush=True)
     await ctx.send(
         f"Export complete. Saved to `{export_file}` and `{assets_dir}/`."
     )

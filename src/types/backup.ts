@@ -127,4 +127,23 @@ export interface BackupMutationResult {
   active_message_id: string | null;
 }
 
+export type BotState =
+  | "stopped"
+  | "starting"
+  | "connected"
+  | "exporting"
+  | "completed"
+  | "error";
+
+export interface BotRuntimeStatus {
+  state: BotState | string;
+  status_text: string;
+  bot_username: string | null;
+  completed_exports: number;
+  last_export_path: string | null;
+  last_error: string | null;
+  has_token_configured: boolean;
+}
+
+
 

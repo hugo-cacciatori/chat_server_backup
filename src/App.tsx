@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   BackupDescriptor,
   BackupMutationResult,
+  BotRuntimeStatus,
   ServerBackup,
 } from "./types/backup";
 import {
@@ -38,6 +39,7 @@ interface AppSettings {
   recent_backup_roots?: string[];
   local_author_name: string;
   local_author_id: string;
+  bot_token?: string;
 }
 
 export function App() {
@@ -46,6 +48,17 @@ export function App() {
   const [recentBackupRoots, setRecentBackupRoots] = useState<string[]>([]);
   const [localAuthorName, setLocalAuthorName] = useState<string>("Local User");
   const [localAuthorId, setLocalAuthorId] = useState<string>("local-user-1");
+  const [botToken, setBotToken] = useState<string>("");
+  const [botStatus, setBotStatus] = useState<BotRuntimeStatus>({
+    state: "stopped",
+    status_text: "Bot stopped",
+    bot_username: null,
+    completed_exports: 0,
+    last_export_path: null,
+    last_error: null,
+    has_token_configured: false,
+  });
+  const lastCompletedExportsRef = useRef<number>(0);
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
@@ -154,6 +167,15 @@ export function App() {
         if (cfg.local_author_id) {
           setLocalAuthorId(cfg.local_author_id);
         }
+        if (typeof cfg.bot_token === "string") {
+          setBotToken(cfg.bot_token);
+        }
+        invoke<BotRuntimeStatus>("get_export_bot_status")
+          .then((st) => {
+            setBotStatus(st);
+            lastCompletedExportsRef.current = st.completed_exports;
+          })
+          .catch(() => {});
         return invoke<BackupDescriptor[]>("list_discovered_backups", {
           customDir: cfg.backup_root || null,
         });
@@ -414,6 +436,91 @@ export function App() {
     }
   };
 
+  const handleSaveBotToken = useCallback(async (newToken: string) => {
+    setBotToken(newToken);
+    try {
+      await invoke<AppSettings>("set_bot_token", {
+        botToken: newToken,
+      });
+      const st = await invoke<BotRuntimeStatus>("get_export_bot_status");
+      setBotStatus(st);
+    } catch (err) {
+      console.error("Failed to save bot token:", err);
+    }
+  }, []);
+
+  const handleStartExportBot = useCallback(async () => {
+    if (!botToken.trim() && !botStatus.has_token_configured) {
+      setSettingsOpen(true);
+      return;
+    }
+    try {
+      const st = await invoke<BotRuntimeStatus>("start_export_bot");
+      setBotStatus(st);
+    } catch (err) {
+      const msg = String(err);
+      setBotStatus((prev) => ({
+        ...prev,
+        state: "error",
+        status_text: msg,
+        last_error: msg,
+      }));
+      if (msg.toLowerCase().includes("token")) {
+        setSettingsOpen(true);
+      }
+    }
+  }, [botToken, botStatus.has_token_configured]);
+
+  const handleStopExportBot = useCallback(async () => {
+    try {
+      const st = await invoke<BotRuntimeStatus>("stop_export_bot");
+      setBotStatus(st);
+    } catch (err) {
+      console.error("Failed to stop export bot:", err);
+    }
+  }, []);
+
+  // Poll Export Bot runtime status while active and auto-reload snapshots on export completion
+  useEffect(() => {
+    const isRunning =
+      botStatus.state === "starting" ||
+      botStatus.state === "connected" ||
+      botStatus.state === "exporting" ||
+      botStatus.state === "completed";
+    if (!isRunning) return;
+
+    const timer = window.setInterval(() => {
+      invoke<BotRuntimeStatus>("get_export_bot_status")
+        .then((st) => {
+          setBotStatus(st);
+          if (st.completed_exports > lastCompletedExportsRef.current) {
+            lastCompletedExportsRef.current = st.completed_exports;
+            invoke<BackupDescriptor[]>("list_discovered_backups", {
+              customDir: backupRootPath || null,
+            })
+              .then((items) => {
+                setBackups(items);
+                if (!hasUnsavedChanges && st.last_export_path) {
+                  loadSnapshot(st.last_export_path);
+                } else if (!hasUnsavedChanges && items.length > 0 && !selectedBackupPath) {
+                  loadSnapshot(items[0].json_path);
+                }
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [
+    botStatus.state,
+    backupRootPath,
+    hasUnsavedChanges,
+    selectedBackupPath,
+    loadSnapshot,
+  ]);
+
   const handleSendMessage = (
     content: string,
     attachmentPaths: string[],
@@ -554,6 +661,7 @@ export function App() {
         localAuthorName={localAuthorName}
         hasUnsavedChanges={hasUnsavedChanges}
         hasEditedBackupForDate={hasEditedBackupForDate}
+        botStatus={botStatus}
         onSelectBackup={loadSnapshot}
         onSelectChannel={handleSelectChannel}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
@@ -561,6 +669,8 @@ export function App() {
         onBrowseBackupRoot={handleBrowseBackupRoot}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenFolderInExplorer={handleOpenFileDefault}
+        onStartExportBot={handleStartExportBot}
+        onStopExportBot={handleStopExportBot}
         onSaveChanges={handleSaveChanges}
         onDiscardChanges={handleDiscardChanges}
         onDeleteEditedBackup={handleDeleteEditedBackup}
@@ -673,6 +783,7 @@ export function App() {
         recentBackupRoots={recentBackupRoots}
         localAuthorName={localAuthorName}
         localAuthorId={localAuthorId}
+        botToken={botToken}
         snapshotCount={backups.length}
         onClose={() => setSettingsOpen(false)}
         onBrowseBackupRoot={handleBrowseBackupRoot}
@@ -682,6 +793,7 @@ export function App() {
         onSaveAuthorProfile={(name, id) => {
           void handleChangeLocalAuthor(name, id);
         }}
+        onSaveBotToken={handleSaveBotToken}
       />
     </div>
   );

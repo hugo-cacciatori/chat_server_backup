@@ -282,15 +282,30 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
         localAuthorName: "Hugo",
         hasUnsavedChanges: false,
         hasEditedBackupForDate: false,
+        botStatus: {
+          state: "connected",
+          status_text: "Connected as ArchiveBot#4821 — ready for !export",
+          bot_username: "ArchiveBot#4821",
+          completed_exports: 1,
+          last_export_path: null,
+          last_error: null,
+          has_token_configured: true,
+        },
         onSelectBackup: () => {},
         onSelectChannel: () => {},
         onOpenGlobalSearch: () => {},
         onChangeBackupRoot: () => {},
         onBrowseBackupRoot: () => {},
         onOpenSettings: () => {},
+        onStartExportBot: () => {},
+        onStopExportBot: () => {},
       }),
     );
 
+    expect(sidebarHtml).toContain("Export Bot");
+    expect(sidebarHtml).toContain("Connected");
+    expect(sidebarHtml).toContain("Connected as ArchiveBot#4821");
+    expect(sidebarHtml).toContain("Stop");
     expect(sidebarHtml).toContain("Backup Folder");
     expect(sidebarHtml).toContain("Browse…");
     expect(sidebarHtml).toContain("Settings");
@@ -306,11 +321,13 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
         ],
         localAuthorName: "Hugo",
         localAuthorId: "hugo-1",
+        botToken: "secret-bot-token",
         snapshotCount: 14,
         onClose: () => {},
         onBrowseBackupRoot: () => {},
         onApplyBackupRoot: () => {},
         onSaveAuthorProfile: () => {},
+        onSaveBotToken: () => {},
       }),
     );
 
@@ -319,6 +336,8 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
     expect(modalHtml).toContain("14 snapshots found");
     expect(modalHtml).toContain("Recent Backup Folders");
     expect(modalHtml).toContain("C:\\OtherBackups\\history");
+    expect(modalHtml).toContain("Export Bot Token");
+    expect(modalHtml).toContain("Token Configured");
     expect(modalHtml).toContain("Local Author Profile");
   });
 });

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   Archive,
+  Bot,
   ExternalLink,
   FolderOpen,
   FolderSearch,
@@ -8,15 +9,22 @@ import {
   LayoutList,
   Lock,
   PencilLine,
+  Play,
   RotateCcw,
   Save,
   Search,
   Server,
   Settings,
+  Square,
   Trash2,
   UserCircle2,
 } from "lucide-react";
-import type { BackupDescriptor, Channel, ServerBackup } from "../types/backup";
+import type {
+  BackupDescriptor,
+  BotRuntimeStatus,
+  Channel,
+  ServerBackup,
+} from "../types/backup";
 
 interface SidebarChannelsProps {
   backups: BackupDescriptor[];
@@ -27,6 +35,7 @@ interface SidebarChannelsProps {
   localAuthorName: string;
   hasUnsavedChanges: boolean;
   hasEditedBackupForDate: boolean;
+  botStatus?: BotRuntimeStatus;
   onSelectBackup: (jsonPath: string) => void;
   onSelectChannel: (channelId: string) => void;
   onOpenGlobalSearch: () => void;
@@ -34,6 +43,8 @@ interface SidebarChannelsProps {
   onBrowseBackupRoot?: () => Promise<void> | void;
   onOpenSettings?: () => void;
   onOpenFolderInExplorer?: (folderPath: string) => void;
+  onStartExportBot?: () => Promise<void> | void;
+  onStopExportBot?: () => Promise<void> | void;
   onSaveChanges?: () => Promise<void> | void;
   onDiscardChanges?: () => void;
   onDeleteEditedBackup?: () => Promise<void> | void;
@@ -49,6 +60,7 @@ export function SidebarChannels({
   localAuthorName,
   hasUnsavedChanges,
   hasEditedBackupForDate,
+  botStatus,
   onSelectBackup,
   onSelectChannel,
   onOpenGlobalSearch,
@@ -56,6 +68,8 @@ export function SidebarChannels({
   onBrowseBackupRoot,
   onOpenSettings,
   onOpenFolderInExplorer,
+  onStartExportBot,
+  onStopExportBot,
   onSaveChanges,
   onDiscardChanges,
   onDeleteEditedBackup,
@@ -209,6 +223,131 @@ export function SidebarChannels({
             )}
           </div>
         )}
+
+        {/* Export Bot Control & Visual Status Cue */}
+        {(() => {
+          const state = botStatus?.state ?? "stopped";
+          const isRunning =
+            state === "starting" ||
+            state === "connected" ||
+            state === "exporting" ||
+            state === "completed";
+
+          const badgeConfig = (() => {
+            switch (state) {
+              case "starting":
+                return {
+                  label: "Starting…",
+                  dotClass: "bg-amber-400 animate-pulse",
+                  pillClass:
+                    "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
+                };
+              case "connected":
+                return {
+                  label: "Connected",
+                  dotClass: "bg-emerald-400 animate-pulse",
+                  pillClass:
+                    "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
+                };
+              case "exporting":
+                return {
+                  label: "Exporting…",
+                  dotClass: "bg-indigo-400 animate-pulse",
+                  pillClass:
+                    "bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-400/40",
+                };
+              case "completed":
+                return {
+                  label: "Export Complete",
+                  dotClass: "bg-emerald-400",
+                  pillClass:
+                    "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/40",
+                };
+              case "error":
+                return {
+                  label: "Error",
+                  dotClass: "bg-rose-400",
+                  pillClass:
+                    "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
+                };
+              default:
+                return {
+                  label: "Stopped",
+                  dotClass: "bg-slate-500",
+                  pillClass:
+                    "bg-slate-800/90 text-slate-400 ring-1 ring-slate-700/60",
+                };
+            }
+          })();
+
+          return (
+            <div className="mt-2.5 rounded-lg border border-slate-800/90 bg-slate-900/50 p-2">
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <Bot className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-300">
+                    Export Bot
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeConfig.pillClass}`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${badgeConfig.dotClass}`}
+                    />
+                    <span>{badgeConfig.label}</span>
+                  </span>
+                </div>
+
+                {isRunning ? (
+                  <button
+                    type="button"
+                    onClick={() => onStopExportBot?.()}
+                    title="Stop the running export bot"
+                    aria-label="Stop Export Bot"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <Square className="h-2.5 w-2.5 fill-current" />
+                    <span>Stop</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onStartExportBot?.()}
+                    title="Start export bot in background"
+                    aria-label="Start Export Bot"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-600/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-colors cursor-pointer"
+                  >
+                    <Play className="h-2.5 w-2.5 fill-current" />
+                    <span>Start Bot</span>
+                  </button>
+                )}
+              </div>
+
+              <div
+                className={`mt-1 truncate text-[10px] ${
+                  state === "error"
+                    ? "text-rose-300"
+                    : state === "exporting" || state === "completed"
+                      ? "text-indigo-200"
+                      : "text-slate-400"
+                }`}
+                title={botStatus?.status_text ?? "Bot stopped"}
+              >
+                {botStatus?.has_token_configured === false && state === "stopped" ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSettings?.()}
+                    className="text-amber-300 underline decoration-amber-400/50 hover:text-amber-200 cursor-pointer"
+                  >
+                    Set bot token in Settings (Ctrl+,)
+                  </button>
+                ) : (
+                  botStatus?.status_text || "Bot stopped"
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Direct Backup Folder Bar (right above Snapshot Selector) */}
         <div className="mt-2.5">
