@@ -1,0 +1,29 @@
+# Virtual environment and Python artifacts
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Builds and local releases
+build/
+dist/
+*.spec.bak
+
+# Reference material, personal backups, and secrets (never public)
+reference/
+history/
+backups/
+*.env
+.env
+.env.*
+bot_token.txt
+
+# AI-agent files and project docs: private, never public (owner, 2026-10-24)
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.gemini/
+.git-docs/
+docs/
