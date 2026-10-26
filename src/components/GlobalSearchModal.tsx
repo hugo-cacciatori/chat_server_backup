@@ -2,7 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { CornerDownLeft, Hash, LayoutList, Paperclip, Search, X } from "lucide-react";
 import type { ServerBackup } from "../types/backup";
 import { useDialogFocus } from "../lib/useDialogFocus";
-import { formatMessageTimestamp } from "./MessageCard";
+import { cleanDisplayFilename, formatShortDate, plainTextSnippet } from "../lib/ui";
+
+export const SEARCH_RESULT_LIMIT = 60;
 
 export interface GlobalSearchResult {
   channelId: string;
@@ -27,7 +29,7 @@ interface GlobalSearchModalProps {
 export function searchAcrossBackup(
   backup: ServerBackup | null,
   rawQuery: string,
-  limit = 60,
+  limit = SEARCH_RESULT_LIMIT,
 ): GlobalSearchResult[] {
   if (!backup) return [];
   const q = rawQuery.trim().toLowerCase();
@@ -38,43 +40,31 @@ export function searchAcrossBackup(
     for (const post of ch.posts) {
       const postTitleMatches = post.name.toLowerCase().includes(q);
       for (const msg of post.messages) {
-        const contentMatches = msg.content.toLowerCase().includes(q);
-        const authorMatches = msg.author.name.toLowerCase().includes(q);
-        const attMatches = msg.attachments.some((a) =>
-          a.filename.toLowerCase().includes(q),
-        );
-        const embedMatches = msg.embeds.some(
-          (e) =>
-            e.title.toLowerCase().includes(q) ||
-            e.description.toLowerCase().includes(q),
-        );
-
-        if (
+        const matches =
           postTitleMatches ||
-          contentMatches ||
-          authorMatches ||
-          attMatches ||
-          embedMatches
-        ) {
-          results.push({
-            channelId: ch.id,
-            channelName: ch.name,
-            channelType: ch.type,
-            postId: post.id,
-            postName: post.name,
-            messageId: msg.id,
-            authorName: msg.author.name,
-            timestamp: msg.timestamp,
-            snippet:
-              msg.content.slice(0, 180) ||
-              msg.embeds[0]?.description?.slice(0, 180) ||
-              "(attachment message)",
-            attachmentNames: msg.attachments.map((a) => a.filename),
-          });
-          if (results.length >= limit) {
-            return results;
-          }
-        }
+          msg.content.toLowerCase().includes(q) ||
+          msg.author.name.toLowerCase().includes(q) ||
+          msg.attachments.some((a) => a.filename.toLowerCase().includes(q)) ||
+          msg.embeds.some(
+            (e) => e.title.toLowerCase().includes(q) || e.description.toLowerCase().includes(q),
+          );
+        if (!matches) continue;
+        results.push({
+          channelId: ch.id,
+          channelName: ch.name,
+          channelType: ch.type,
+          postId: post.id,
+          postName: post.name,
+          messageId: msg.id,
+          authorName: msg.author.name,
+          timestamp: msg.timestamp,
+          snippet:
+            plainTextSnippet(msg.content, 180) ||
+            plainTextSnippet(msg.embeds[0]?.description ?? "", 180) ||
+            "(attachments only)",
+          attachmentNames: msg.attachments.map((a) => cleanDisplayFilename(a.filename)),
+        });
+        if (results.length >= limit) return results;
       }
     }
   }
@@ -87,12 +77,27 @@ export function moveActiveIndex(current: number, delta: number, count: number): 
   return Math.min(count - 1, Math.max(0, current + delta));
 }
 
-export function GlobalSearchModal({
-  isOpen,
-  backup,
-  onClose,
-  onSelectResult,
-}: GlobalSearchModalProps) {
+function Highlighted({ text, query }: { text: string; query: string }) {
+  const q = query.trim();
+  if (!q) return <>{text}</>;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === q.toLowerCase() ? (
+          <mark key={i} className="rounded-sm bg-amber-400/30 px-0.5 text-ink">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
+export function GlobalSearchModal({ isOpen, backup, onClose, onSelectResult }: GlobalSearchModalProps) {
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -145,10 +150,7 @@ export function GlobalSearchModal({
   const showResults = Boolean(query.trim()) && results.length > 0;
 
   return (
-    <div
-      onClick={onClose}
-      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/80 pt-20 backdrop-blur-xs"
-    >
+    <div onClick={onClose} className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pt-20">
       <div
         ref={panelRef}
         role="dialog"
@@ -156,11 +158,10 @@ export function GlobalSearchModal({
         aria-label="Search backup"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[75vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl"
+        className="flex max-h-[75vh] w-full max-w-2xl flex-col overflow-hidden rounded-[10px] border border-line bg-surface-1 shadow-2xl"
       >
-        {/* Search Input Header */}
-        <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3">
-          <Search className="h-4 w-4 shrink-0 text-indigo-400" />
+        <div className="flex items-center gap-3 border-b border-line px-4 py-3">
+          <Search className="h-4 w-4 shrink-0 text-ink-muted" />
           <input
             ref={inputRef}
             type="text"
@@ -172,40 +173,35 @@ export function GlobalSearchModal({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleInputKeyDown}
-            placeholder="Search messages, post titles, authors, embeds, or filenames across the backup…"
-            className="flex-1 bg-transparent text-sm text-white placeholder:text-slate-500 focus:outline-none"
+            placeholder="Search messages, titles, authors, embeds and file names"
+            className="flex-1 bg-transparent text-body text-ink placeholder:text-ink-faint focus:outline-none"
           />
           {query && (
             <button
               type="button"
               onClick={() => setQuery("")}
               aria-label="Clear search"
-              className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white cursor-pointer"
+              className="rounded p-1 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
             >
               <X className="h-4 w-4" />
             </button>
           )}
-          <kbd className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
-            ESC
-          </kbd>
+          <kbd className="font-sans text-meta text-ink-faint">Esc</kbd>
         </div>
 
-        {/* Results List */}
         <div
           ref={listRef}
           id="global-search-results"
           role="listbox"
           aria-label="Search results"
-          className="flex-1 overflow-y-auto p-2 space-y-1"
+          className="flex-1 overflow-y-auto p-1.5"
         >
           {!query.trim() ? (
-            <div className="py-12 text-center text-xs text-slate-500">
-              Type a keyword, filename, or author name to search across all channels and posts.
-            </div>
+            <p className="py-12 text-center text-ui text-ink-muted">
+              Type a word, file name or author. ↑ ↓ to move, Enter to open.
+            </p>
           ) : results.length === 0 ? (
-            <div className="py-12 text-center text-xs text-slate-500">
-              No results matching "{query}".
-            </div>
+            <p className="py-12 text-center text-ui text-ink-muted">No results for “{query}”.</p>
           ) : (
             results.map((r, index) => {
               const ChIcon = r.channelType === "forum" ? LayoutList : Hash;
@@ -220,51 +216,48 @@ export function GlobalSearchModal({
                   tabIndex={-1}
                   onClick={() => openResult(index)}
                   onMouseMove={() => setActiveIndex(index)}
-                  className={`group flex w-full flex-col rounded-xl border p-3 text-left transition-all cursor-pointer ${
-                    isActive
-                      ? "border-indigo-500/40 bg-indigo-600/10"
-                      : "border-transparent bg-slate-950/50"
+                  className={`flex w-full flex-col rounded-md px-3 py-2 text-left cursor-pointer ${
+                    isActive ? "bg-surface-3" : ""
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <div className="flex min-w-0 items-center gap-1.5 text-indigo-300 font-medium">
-                      <ChIcon className="h-3.5 w-3.5 shrink-0" />
-                      <span className="truncate">{r.channelName}</span>
-                      <span className="text-slate-600">/</span>
-                      <span className="truncate text-white font-semibold">
-                        {r.postName}
-                      </span>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2 text-[11px] text-slate-400">
-                      <span>@{r.authorName}</span>
-                      <span>•</span>
-                      <span>{formatMessageTimestamp(r.timestamp)}</span>
-                      <CornerDownLeft
-                        className={`h-3.5 w-3.5 text-indigo-400 ${isActive ? "opacity-100" : "opacity-0"}`}
-                      />
-                    </div>
-                  </div>
-                  <p className="mt-1.5 line-clamp-2 text-xs text-slate-300">
-                    {r.snippet}
-                  </p>
+                  <span className="flex items-center gap-1.5 text-meta text-ink-muted">
+                    <ChIcon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="max-w-[10rem] shrink-0 truncate">{r.channelName}</span>
+                    <span>/</span>
+                    <span className="min-w-0 truncate text-ink">{r.postName}</span>
+                    <span className="ml-auto shrink-0">
+                      {r.authorName} · {formatShortDate(r.timestamp)}
+                    </span>
+                    <CornerDownLeft
+                      className={`h-3.5 w-3.5 shrink-0 text-accent ${isActive ? "opacity-100" : "opacity-0"}`}
+                    />
+                  </span>
+                  <span className="mt-1 line-clamp-2 text-ui text-ink">
+                    <Highlighted text={r.snippet} query={query} />
+                  </span>
                   {r.attachmentNames.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <span className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-meta text-ink-muted">
                       {r.attachmentNames.map((name, i) => (
-                        <span
-                          key={i}
-                          className="inline-flex items-center gap-1 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-300"
-                        >
-                          <Paperclip className="h-2.5 w-2.5 text-indigo-400" />
-                          <span className="truncate max-w-xs">{name}</span>
+                        <span key={i} className="inline-flex min-w-0 items-center gap-1">
+                          <Paperclip className="h-3 w-3 shrink-0" />
+                          <span className="max-w-[14rem] truncate">
+                            <Highlighted text={name} query={query} />
+                          </span>
                         </span>
                       ))}
-                    </div>
+                    </span>
                   )}
                 </button>
               );
             })
           )}
         </div>
+
+        {results.length >= SEARCH_RESULT_LIMIT && (
+          <div className="border-t border-line px-4 py-2 text-meta text-ink-muted">
+            Showing the first {SEARCH_RESULT_LIMIT} results — refine your search to see more.
+          </div>
+        )}
       </div>
     </div>
   );

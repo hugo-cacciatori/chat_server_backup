@@ -1,11 +1,9 @@
-import { useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { memo, useState } from "react";
 import {
   Check,
   Copy,
   CornerUpLeft,
   CornerUpRight,
-  FolderOpen,
   Link2,
   Paperclip,
   Pencil,
@@ -13,15 +11,17 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import type { AttachmentRef, Message, ServerBackup } from "../types/backup";
+import type { Message, ServerBackup } from "../types/backup";
 import type { InternalServerTarget } from "../lib/links";
+import { authorInitials, formatTimeOfDay, plainTextSnippet } from "../lib/ui";
 import { RichContent } from "./RichContent";
 import { EmbedCard } from "./EmbedCard";
-import { AudioAttachmentCard, VideoAttachmentCard } from "./MediaCards";
-import { DocumentAttachmentCard } from "./DocumentCards";
+import { AttachmentList } from "./Attachments";
 
 interface MessageCardProps {
   message: Message;
+  /** First message of a group shows avatar, name and time (SPEC §7.7). */
+  isGroupStart?: boolean;
   replyTargetMessage?: Message | null;
   backup: ServerBackup | null;
   channelId: string;
@@ -45,20 +45,16 @@ interface MessageCardProps {
 }
 
 const AVATAR_PALETTE = [
-  "bg-indigo-600 text-indigo-100",
-  "bg-emerald-600 text-emerald-100",
-  "bg-amber-600 text-amber-100",
-  "bg-rose-600 text-rose-100",
-  "bg-cyan-600 text-cyan-100",
-  "bg-violet-600 text-violet-100",
-  "bg-teal-600 text-teal-100",
+  "bg-indigo-600",
+  "bg-emerald-600",
+  "bg-amber-600",
+  "bg-rose-600",
+  "bg-cyan-600",
+  "bg-violet-600",
+  "bg-teal-600",
 ];
 
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
-const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "mkv"]);
-const AUDIO_EXTENSIONS = new Set(["mp3", "flac", "wav", "ogg", "m4a"]);
-
-function getAvatarColorClass(idOrName: string): string {
+function avatarColor(idOrName: string): string {
   let hash = 0;
   for (let i = 0; i < idOrName.length; i++) {
     hash = (hash * 31 + idOrName.charCodeAt(i)) | 0;
@@ -70,120 +66,32 @@ export function formatMessageTimestamp(iso: string): string {
   if (!iso) return "";
   const dt = new Date(iso);
   if (Number.isNaN(dt.getTime())) return iso;
-  return dt.toLocaleString(undefined, {
+  return dt.toLocaleString("en-GB", {
     year: "numeric",
     month: "short",
-    day: "2-digit",
+    day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
 }
 
-export function cleanDisplayFilename(filename: string): string {
-  return filename.replace(/^(?:\d+_)+/, "") || filename;
-}
+const toolButton =
+  "rounded p-1.5 text-ink-muted hover:bg-surface-3 hover:text-ink cursor-pointer";
 
-function toAssetUrl(resolvedPath: string | null): string {
-  if (!resolvedPath) return "";
-  try {
-    return convertFileSrc(resolvedPath);
-  } catch {
-    return resolvedPath;
-  }
-}
-
-function AttachmentItem({
-  att,
-  onOpenImageLightbox,
-  onOpenPdfModal,
-  onOpenFileDefault,
-  onRevealInExplorer,
-}: {
-  att: AttachmentRef;
-  onOpenImageLightbox?: (src: string, caption: string, filePath?: string | null) => void;
-  onOpenPdfModal?: (src: string, title: string, filePath?: string | null) => void;
-  onOpenFileDefault?: (filePath: string) => void;
-  onRevealInExplorer?: (filePath: string) => void;
-}) {
-  const ext = att.extension.toLowerCase();
-  const displayName = cleanDisplayFilename(att.filename);
-  const assetUrl = toAssetUrl(att.resolved_path);
-
-  if (IMAGE_EXTENSIONS.has(ext) && att.exists && assetUrl) {
-    return (
-      <div className="mt-2 inline-block max-w-lg overflow-hidden rounded-xl border border-slate-800 bg-slate-900/75 shadow-sm">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800/80 px-3 py-1.5 text-xs text-slate-300">
-          <span className="truncate font-medium" title={att.filename}>
-            {displayName}
-          </span>
-          <div className="flex items-center gap-1 shrink-0">
-            {att.resolved_path && onRevealInExplorer && (
-              <button
-                type="button"
-                aria-label="Show in Explorer"
-                onClick={() => onRevealInExplorer(att.resolved_path!)}
-                title="Show in Explorer"
-                className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100 cursor-pointer"
-              >
-                <FolderOpen className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => onOpenImageLightbox?.(assetUrl, displayName, att.resolved_path)}
-          aria-label={`Open image ${displayName}`}
-          className="block cursor-zoom-in"
-        >
-          <img
-            src={assetUrl}
-            alt={displayName}
-            className="max-h-72 max-w-full bg-slate-950 object-contain"
-          />
-        </button>
-      </div>
-    );
-  }
-
-  if (VIDEO_EXTENSIONS.has(ext) && att.exists && assetUrl) {
-    return (
-      <VideoAttachmentCard
-        att={att}
-        displayName={displayName}
-        assetUrl={assetUrl}
-        onOpenFileDefault={onOpenFileDefault}
-        onRevealInExplorer={onRevealInExplorer}
-      />
-    );
-  }
-
-  if (AUDIO_EXTENSIONS.has(ext) && att.exists && assetUrl) {
-    return (
-      <AudioAttachmentCard
-        att={att}
-        displayName={displayName}
-        assetUrl={assetUrl}
-        onOpenFileDefault={onOpenFileDefault}
-        onRevealInExplorer={onRevealInExplorer}
-      />
-    );
-  }
-
+function LocalStateMarker({ state }: { state: Message["local_edit_state"] }) {
+  if (state === "original") return null;
+  const added = state === "added";
   return (
-    <DocumentAttachmentCard
-      att={att}
-      displayName={displayName}
-      assetUrl={assetUrl}
-      onOpenPdfModal={onOpenPdfModal}
-      onOpenFileDefault={onOpenFileDefault}
-      onRevealInExplorer={onRevealInExplorer}
-    />
+    <span className="inline-flex items-center gap-1 text-meta text-ink-muted">
+      <span className={`h-1.5 w-1.5 rounded-full ${added ? "bg-emerald-400" : "bg-amber-400"}`} aria-hidden="true" />
+      {added ? "Added locally" : "Edited locally"}
+    </span>
   );
 }
 
-export function MessageCard({
+function MessageCardImpl({
   message,
+  isGroupStart = true,
   replyTargetMessage,
   backup,
   channelId,
@@ -201,8 +109,7 @@ export function MessageCard({
   onEditMessage,
   onDeleteMessage,
 }: MessageCardProps) {
-  const [copiedText, setCopiedText] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
+  const [copied, setCopied] = useState<"text" | "link" | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(message.content);
   const [editAttPathInput, setEditAttPathInput] = useState("");
@@ -210,22 +117,18 @@ export function MessageCard({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const authorName = message.author.name || "Unknown";
-  const initial = (authorName[0] || "?").toUpperCase();
-  const avatarColor = getAvatarColorClass(message.author.id || authorName);
+  const showHeader = isGroupStart || Boolean(message.reply_to_id);
 
-  const handleCopyText = () => {
-    navigator.clipboard?.writeText(message.content || "");
-    setCopiedText(true);
-    setTimeout(() => setCopiedText(false), 1600);
+  const flashCopied = (what: "text" | "link") => {
+    setCopied(what);
+    setTimeout(() => setCopied(null), 1600);
   };
 
   const handleCopyLink = () => {
     const serverId = backup?.id || "0";
-    const targetChannelOrPost = postId.endsWith("_main") ? channelId : postId;
-    const url = `https://archive.local/channels/${serverId}/${targetChannelOrPost}/${message.id}`;
-    navigator.clipboard?.writeText(url);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 1600);
+    const target = postId.endsWith("_main") ? channelId : postId;
+    navigator.clipboard?.writeText(`https://archive.local/channels/${serverId}/${target}/${message.id}`);
+    flashCopied("link");
   };
 
   const handleStartEdit = () => {
@@ -233,13 +136,6 @@ export function MessageCard({
     setEditAttPaths([]);
     setEditAttPathInput("");
     setIsEditing(true);
-  };
-
-  const handleAddEditAttachment = () => {
-    const p = editAttPathInput.trim();
-    if (!p) return;
-    setEditAttPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
-    setEditAttPathInput("");
   };
 
   const handleSaveEdit = async () => {
@@ -252,251 +148,225 @@ export function MessageCard({
     <article
       id={`msg-${message.id}`}
       data-message-id={message.id}
-      className={`group relative rounded-xl px-4 py-3 transition-all duration-200 ${
-        isHighlighted
-          ? "bg-indigo-500/15 ring-2 ring-indigo-500/60"
-          : "hover:bg-slate-900/50"
+      aria-label={`${authorName}, ${formatMessageTimestamp(message.timestamp)}`}
+      className={`group relative rounded-md px-2 py-1 transition-colors ${showHeader ? "mt-3" : ""} ${
+        isHighlighted ? "bg-accent/10 shadow-[inset_2px_0_0_var(--color-accent)]" : "hover:bg-surface-1"
       }`}
     >
-      {/* Hover Action Toolbar */}
-      {/* Shown on hover or keyboard focus; opacity (not visibility) keeps the buttons reachable with Tab */}
+      {/* Actions: shown on hover or keyboard focus; opacity keeps them reachable with Tab */}
       <div
         role="toolbar"
         aria-label={`Actions for message from ${authorName}`}
-        className="pointer-events-none absolute -top-2.5 right-4 z-10 flex items-center gap-0.5 rounded-lg border border-slate-700/80 bg-slate-900 px-1.5 py-1 opacity-0 shadow-lg group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+        className="pointer-events-none absolute -top-3.5 right-2 z-10 flex items-center gap-0.5 rounded-md border border-line bg-surface-2 p-0.5 opacity-0 shadow-lg group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
       >
         <button
           type="button"
-          onClick={handleCopyText}
-          title="Copy message text"
-          className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+          onClick={() => {
+            navigator.clipboard?.writeText(message.content || "");
+            flashCopied("text");
+          }}
+          title="Copy text"
+          aria-label="Copy text"
+          className={toolButton}
         >
-          {copiedText ? (
-            <>
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-emerald-400">Copied</span>
-            </>
-          ) : (
-            <>
-              <Copy className="h-3 w-3" />
-              <span>Copy</span>
-            </>
-          )}
+          {copied === "text" ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
         </button>
-        <button
-          type="button"
-          onClick={handleCopyLink}
-          title="Copy internal jump link"
-          className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
-        >
-          {copiedLink ? (
-            <>
-              <Check className="h-3 w-3 text-emerald-400" />
-              <span className="text-emerald-400">Linked</span>
-            </>
-          ) : (
-            <>
-              <Link2 className="h-3 w-3" />
-              <span>Link</span>
-            </>
-          )}
+        <button type="button" onClick={handleCopyLink} title="Copy link" aria-label="Copy link" className={toolButton}>
+          {copied === "link" ? <Check className="h-4 w-4 text-emerald-400" /> : <Link2 className="h-4 w-4" />}
         </button>
         {onReplyMessage && (
           <button
             type="button"
             onClick={() => onReplyMessage(message)}
-            title="Reply to message"
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
+            title="Reply"
+            aria-label="Reply"
+            className={toolButton}
           >
-            <CornerUpLeft className="h-3 w-3" />
-            <span>Reply</span>
+            <CornerUpLeft className="h-4 w-4" />
           </button>
         )}
         {onEditMessage && (
-          <button
-            type="button"
-            onClick={handleStartEdit}
-            title="Edit message locally"
-            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-slate-300 hover:bg-slate-800 hover:text-white cursor-pointer"
-          >
-            <Pencil className="h-3 w-3" />
-            <span>Edit</span>
+          <button type="button" onClick={handleStartEdit} title="Edit" aria-label="Edit" className={toolButton}>
+            <Pencil className="h-4 w-4" />
           </button>
         )}
-        {onDeleteMessage && (
-          confirmingDelete ? (
-            <div className="inline-flex items-center gap-1 pl-1">
+        {onDeleteMessage &&
+          (confirmingDelete ? (
+            <span className="flex items-center gap-1 px-1 text-meta text-ink">
+              Delete?
               <button
                 type="button"
                 onClick={() => {
                   setConfirmingDelete(false);
                   onDeleteMessage(message.id);
                 }}
-                className="rounded bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-500 cursor-pointer"
+                className="rounded bg-rose-600 px-2 py-0.5 font-semibold text-white hover:bg-rose-500 cursor-pointer"
               >
-                Confirm
+                Delete
               </button>
               <button
                 type="button"
                 onClick={() => setConfirmingDelete(false)}
-                className="rounded px-1.5 py-0.5 text-[11px] text-slate-400 hover:text-white cursor-pointer"
+                className="rounded px-1.5 py-0.5 text-ink-muted hover:text-ink cursor-pointer"
               >
                 Cancel
               </button>
-            </div>
+            </span>
           ) : (
             <button
               type="button"
               onClick={() => setConfirmingDelete(true)}
-              title="Delete message locally"
-              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-rose-400 hover:bg-rose-500/20 hover:text-rose-200 cursor-pointer"
+              title="Delete"
+              aria-label="Delete"
+              className="rounded p-1.5 text-rose-400 hover:bg-surface-3 hover:text-rose-300 cursor-pointer"
             >
-              <Trash2 className="h-3 w-3" />
-              <span>Delete</span>
+              <Trash2 className="h-4 w-4" />
             </button>
-          )
-        )}
+          ))}
       </div>
 
-      {/* Reply Reference Header */}
+      {/* Reply reference */}
       {message.reply_to_id && (
-        <div className="mb-1.5 flex items-center gap-1.5 pl-12 text-xs text-slate-400">
-          <CornerUpRight className="h-3.5 w-3.5 text-slate-500 shrink-0" />
+        <div className="mb-1 flex items-center gap-1.5 pl-12 text-meta text-ink-muted">
+          <CornerUpRight className="h-3.5 w-3.5 shrink-0" />
           {replyTargetMessage ? (
             <button
               type="button"
               onClick={() => onJumpToMessageInPost?.(replyTargetMessage.id)}
-              className="inline-flex items-center gap-1.5 truncate hover:text-indigo-300 cursor-pointer"
+              className="flex min-w-0 items-center gap-1.5 hover:text-ink cursor-pointer"
             >
-              <span className="font-semibold text-slate-300">
-                @{replyTargetMessage.author.name}
-              </span>
-              <span className="truncate text-slate-400 max-w-md">
-                {replyTargetMessage.content || "(attachment)"}
+              <span className="shrink-0 font-semibold text-ink">{replyTargetMessage.author.name}</span>
+              <span className="truncate">
+                {plainTextSnippet(replyTargetMessage.content, 120) || "(attachment)"}
               </span>
             </button>
           ) : (
-            <span>Replying to message #{message.reply_to_id}</span>
+            <span>Reply to a message that is not in this backup</span>
           )}
         </div>
       )}
 
-      <div className="flex items-start gap-3.5">
-        <div
-          className={`flex h-9 w-9 shrink-0 select-none items-center justify-center rounded-full text-sm font-bold shadow-sm ${avatarColor}`}
-        >
-          {initial}
+      <div className="flex gap-3">
+        {/* Gutter: avatar on group start, time on hover otherwise */}
+        <div className="w-9 shrink-0">
+          {showHeader ? (
+            <div
+              className={`flex h-9 w-9 select-none items-center justify-center rounded-full text-meta font-semibold text-white ${avatarColor(
+                message.author.id || authorName,
+              )}`}
+              aria-hidden="true"
+            >
+              {authorInitials(authorName)}
+            </div>
+          ) : (
+            <time
+              dateTime={message.timestamp}
+              className="block pt-1 text-right text-meta text-ink-faint opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+            >
+              {formatTimeOfDay(message.timestamp)}
+            </time>
+          )}
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-2">
-            <span className="text-sm font-semibold text-slate-100">
-              {authorName}
-            </span>
-            {message.author.bot && (
-              <span className="rounded bg-indigo-500/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-indigo-300 ring-1 ring-indigo-500/30">
-                BOT
-              </span>
-            )}
-            <time className="text-xs text-slate-400">
-              {formatMessageTimestamp(message.timestamp)}
-            </time>
-            {message.edited_timestamp && (
-              <span
-                title={`Edited ${formatMessageTimestamp(message.edited_timestamp)}`}
-                className="text-[11px] italic text-slate-400"
-              >
-                (edited)
-              </span>
-            )}
-            {message.local_edit_state === "added" && (
-              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300 ring-1 ring-emerald-500/30">
-                Added locally
-              </span>
-            )}
-            {message.local_edit_state === "edited" && (
-              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300 ring-1 ring-amber-500/30">
-                Edited locally
-              </span>
-            )}
-          </div>
+          {showHeader && (
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <span className="text-title text-ink">{authorName}</span>
+              {message.author.bot && (
+                <span className="rounded bg-surface-3 px-1 text-meta text-ink-muted">Bot</span>
+              )}
+              <time dateTime={message.timestamp} className="text-meta text-ink-muted">
+                {formatMessageTimestamp(message.timestamp)}
+              </time>
+              {message.edited_timestamp && (
+                <span title={`Edited ${formatMessageTimestamp(message.edited_timestamp)}`} className="text-meta text-ink-muted">
+                  (edited)
+                </span>
+              )}
+              <LocalStateMarker state={message.local_edit_state} />
+            </div>
+          )}
+          {!showHeader && message.local_edit_state !== "original" && (
+            <LocalStateMarker state={message.local_edit_state} />
+          )}
 
-          <div className="mt-1">
+          <div className={showHeader ? "mt-0.5" : ""}>
             {isEditing ? (
-              <div className="mt-1.5 space-y-2 rounded-xl border border-indigo-500/40 bg-slate-900/90 p-3">
+              <div className="mt-1 space-y-2 rounded-[10px] border border-line bg-surface-1 p-2.5">
                 <textarea
                   value={editDraft}
                   onChange={(e) => setEditDraft(e.target.value)}
+                  aria-label="Edit message"
+                  autoFocus
                   onKeyDown={(e) => {
                     if (e.key === "Escape") {
                       e.preventDefault();
                       setIsEditing(false);
                     } else if (e.key === "Enter" && !e.shiftKey) {
                       e.preventDefault();
-                      handleSaveEdit();
+                      void handleSaveEdit();
                     }
                   }}
                   rows={3}
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  className="w-full resize-y rounded-md border border-line bg-surface-0 p-2 text-body text-ink focus:border-accent focus:outline-none"
                 />
-
-                {/* Optional local file attachment staging on edit */}
                 <div className="flex items-center gap-1.5">
-                  <Paperclip className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                  <Paperclip className="h-4 w-4 shrink-0 text-ink-muted" />
                   <input
                     type="text"
                     value={editAttPathInput}
                     onChange={(e) => setEditAttPathInput(e.target.value)}
-                    placeholder="Add local file path (optional)…"
-                    className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+                    placeholder="Add a file by path (optional)"
+                    aria-label="Attachment file path"
+                    className="min-w-0 flex-1 rounded-md border border-line bg-surface-0 px-2 py-1 text-ui text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
                   />
                   <button
                     type="button"
-                    onClick={handleAddEditAttachment}
-                    className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700 cursor-pointer"
+                    onClick={() => {
+                      const p = editAttPathInput.trim();
+                      if (!p) return;
+                      setEditAttPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
+                      setEditAttPathInput("");
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md bg-surface-3 px-2 py-1 text-ui text-ink cursor-pointer"
                   >
-                    <Plus className="h-3 w-3" />
-                    <span>Attach</span>
+                    <Plus className="h-3.5 w-3.5" />
+                    Attach
                   </button>
                 </div>
-
                 {editAttPaths.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
+                  <ul className="space-y-1">
                     {editAttPaths.map((p) => (
-                      <span
-                        key={p}
-                        className="inline-flex items-center gap-1 rounded-md bg-indigo-500/15 px-2 py-0.5 text-[11px] text-indigo-200 ring-1 ring-indigo-500/30"
-                      >
-                        <span className="truncate max-w-xs">{p}</span>
+                      <li key={p} className="flex items-center gap-1.5 text-meta text-ink-muted">
+                        <span className="min-w-0 flex-1 truncate" title={p}>
+                          {p}
+                        </span>
                         <button
                           type="button"
                           aria-label="Remove attachment"
-                          onClick={() =>
-                            setEditAttPaths((prev) => prev.filter((x) => x !== p))
-                          }
-                          className="text-indigo-300 hover:text-white cursor-pointer"
+                          onClick={() => setEditAttPaths((prev) => prev.filter((x) => x !== p))}
+                          className="rounded p-0.5 hover:bg-surface-3 hover:text-ink cursor-pointer"
                         >
-                          <X className="h-3 w-3" />
+                          <X className="h-3.5 w-3.5" />
                         </button>
-                      </span>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
                 )}
-
-                <div className="flex items-center justify-between text-[11px] text-slate-400">
-                  <span>Enter to save • Shift+Enter for newline • Esc to cancel</span>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-meta text-ink-muted">Enter to save · Shift+Enter for a new line · Esc to cancel</span>
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => setIsEditing(false)}
-                      className="rounded-md px-2.5 py-1 text-xs text-slate-300 hover:bg-slate-800 cursor-pointer"
+                      className="rounded-md px-2.5 py-1 text-ui text-ink-muted hover:bg-surface-3 hover:text-ink cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
-                      onClick={handleSaveEdit}
-                      className="rounded-md bg-indigo-600 px-3 py-1 text-xs font-medium text-white hover:bg-indigo-500 cursor-pointer"
+                      onClick={() => void handleSaveEdit()}
+                      className="rounded-md bg-accent-strong px-3 py-1 text-ui font-semibold text-white hover:bg-accent cursor-pointer"
                     >
                       Save edit
                     </button>
@@ -510,27 +380,21 @@ export function MessageCard({
                 searchQuery={searchQuery}
                 onJumpToTarget={onJumpToTarget}
                 onOpenExternalUrl={onOpenExternalUrl}
+                hideEmpty={message.attachments.length > 0 || message.embeds.length > 0}
               />
             )}
           </div>
 
-          {message.attachments.length > 0 && (
-            <div className="mt-1 flex flex-col gap-1.5">
-              {message.attachments.map((att, idx) => (
-                <AttachmentItem
-                  key={`${att.relative_path}-${idx}`}
-                  att={att}
-                  onOpenImageLightbox={onOpenImageLightbox}
-                  onOpenPdfModal={onOpenPdfModal}
-                  onOpenFileDefault={onOpenFileDefault}
-                  onRevealInExplorer={onRevealInExplorer}
-                />
-              ))}
-            </div>
-          )}
+          <AttachmentList
+            attachments={message.attachments}
+            onOpenImageLightbox={onOpenImageLightbox}
+            onOpenPdfModal={onOpenPdfModal}
+            onOpenFileDefault={onOpenFileDefault}
+            onRevealInExplorer={onRevealInExplorer}
+          />
 
           {message.embeds.length > 0 && (
-            <div className="mt-1 flex flex-col gap-2">
+            <div className="mt-2 flex max-w-[35rem] flex-col gap-2">
               {message.embeds.map((embed, idx) => (
                 <EmbedCard
                   key={idx}
@@ -539,9 +403,7 @@ export function MessageCard({
                   searchQuery={searchQuery}
                   onJumpToTarget={onJumpToTarget}
                   onOpenExternalUrl={onOpenExternalUrl}
-                  onOpenImageLightbox={(src, cap) =>
-                    onOpenImageLightbox?.(src, cap, null)
-                  }
+                  onOpenImageLightbox={(src, cap) => onOpenImageLightbox?.(src, cap, null)}
                 />
               ))}
             </div>
@@ -551,3 +413,5 @@ export function MessageCard({
     </article>
   );
 }
+
+export const MessageCard = memo(MessageCardImpl);

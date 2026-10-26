@@ -1,23 +1,18 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  Archive,
-  Bot,
+  ChevronDown,
+  ChevronRight,
   ExternalLink,
-  FolderOpen,
-  FolderSearch,
+  Folder,
   Hash,
   LayoutList,
   Lock,
+  PanelLeftClose,
   PencilLine,
   Play,
-  RotateCcw,
-  Save,
   Search,
-  Server,
   Settings,
   Square,
-  Trash2,
-  UserCircle2,
 } from "lucide-react";
 import type {
   BackupDescriptor,
@@ -25,6 +20,7 @@ import type {
   Channel,
   ServerBackup,
 } from "../types/backup";
+import { groupChannelsByCategory } from "../lib/ui";
 
 interface SidebarChannelsProps {
   backups: BackupDescriptor[];
@@ -32,24 +28,33 @@ interface SidebarChannelsProps {
   currentBackup: ServerBackup | null;
   selectedChannelId: string;
   backupRootPath: string;
-  localAuthorName: string;
-  hasUnsavedChanges: boolean;
   canDeleteEditedBackup: boolean;
   botStatus?: BotRuntimeStatus;
   onSelectBackup: (jsonPath: string) => void;
   onSelectChannel: (channelId: string) => void;
   onOpenGlobalSearch: () => void;
-  onChangeBackupRoot: (newRoot: string) => void;
   onBrowseBackupRoot?: () => Promise<void> | void;
   onOpenSettings?: () => void;
   onOpenFolderInExplorer?: (folderPath: string) => void;
   onStartExportBot?: () => Promise<void> | void;
   onStopExportBot?: () => Promise<void> | void;
-  onSaveChanges?: () => Promise<void> | void;
-  onDiscardChanges?: () => void;
   onDeleteEditedBackup?: () => Promise<void> | void;
-  onChangeLocalAuthor?: (authorName: string) => Promise<void> | void;
+  onCollapse?: () => void;
 }
+
+/** "2026-10-20 (Edited)" → "2026-10-20 · Edited" (SPEC §7.5). */
+export function snapshotOptionLabel(b: BackupDescriptor): string {
+  return `${b.date_label} · ${b.is_edited ? "Edited" : "Original"}`;
+}
+
+const BOT_STATES: Record<string, { label: string; dot: string }> = {
+  starting: { label: "Starting", dot: "bg-amber-400 animate-pulse" },
+  connected: { label: "Connected", dot: "bg-emerald-400" },
+  exporting: { label: "Exporting", dot: "bg-accent animate-pulse" },
+  completed: { label: "Export complete", dot: "bg-emerald-400" },
+  error: { label: "Error", dot: "bg-rose-400" },
+  stopped: { label: "Stopped", dot: "bg-ink-faint" },
+};
 
 export function SidebarChannels({
   backups,
@@ -57,474 +62,251 @@ export function SidebarChannels({
   currentBackup,
   selectedChannelId,
   backupRootPath,
-  localAuthorName,
-  hasUnsavedChanges,
   canDeleteEditedBackup,
   botStatus,
   onSelectBackup,
   onSelectChannel,
   onOpenGlobalSearch,
-  onChangeBackupRoot,
   onBrowseBackupRoot,
   onOpenSettings,
   onOpenFolderInExplorer,
   onStartExportBot,
   onStopExportBot,
-  onSaveChanges,
-  onDiscardChanges,
   onDeleteEditedBackup,
-  onChangeLocalAuthor,
+  onCollapse,
 }: SidebarChannelsProps) {
-  const [editingRoot, setEditingRoot] = useState(false);
-  const [rootInput, setRootInput] = useState(backupRootPath);
-  const [authorInput, setAuthorInput] = useState(localAuthorName);
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(new Set());
+  const groups = useMemo(
+    () => groupChannelsByCategory(currentBackup?.channels ?? []),
+    [currentBackup],
+  );
 
-  const channels = currentBackup?.channels ?? [];
-  const forumChannels = channels.filter((c) => c.type === "forum");
-  const textChannels = channels.filter((c) => c.type !== "forum");
+  const toggleCategory = (name: string) =>
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
-  const handleSaveRoot = (e: React.FormEvent) => {
-    e.preventDefault();
-    setEditingRoot(false);
-    onChangeBackupRoot(rootInput.trim());
-    if (onChangeLocalAuthor && authorInput.trim()) {
-      onChangeLocalAuthor(authorInput.trim());
-    }
-  };
+  const state = botStatus?.state ?? "stopped";
+  const bot = BOT_STATES[state] ?? BOT_STATES.stopped;
+  const botRunning = ["starting", "connected", "exporting", "completed"].includes(state);
+  const needsToken = botStatus?.has_token_configured === false && state === "stopped";
 
-  const renderChannelButton = (ch: Channel) => {
+  const renderChannel = (ch: Channel) => {
     const isSelected = ch.id === selectedChannelId;
-    const isForum = ch.type === "forum";
-    const Icon = isForum ? LayoutList : Hash;
+    const Icon = ch.type === "forum" ? LayoutList : Hash;
     return (
       <button
         key={ch.id}
         type="button"
         onClick={() => onSelectChannel(ch.id)}
-        className={`group flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-all cursor-pointer ${
+        aria-current={isSelected ? "true" : undefined}
+        className={`relative flex w-full items-center gap-2 rounded-md py-1.5 pl-2.5 pr-2 text-left text-ui transition-colors cursor-pointer ${
           isSelected
-            ? "bg-indigo-600/20 text-white ring-1 ring-indigo-500/40"
-            : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"
+            ? "bg-surface-3 text-ink before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+            : "text-ink-muted hover:bg-surface-2 hover:text-ink"
         }`}
       >
-        <div className="flex min-w-0 items-center gap-2">
-          <Icon
-            className={`h-4 w-4 shrink-0 ${
-              isSelected
-                ? "text-indigo-400"
-                : "text-slate-500 group-hover:text-slate-300"
-            }`}
-          />
-          <span className="truncate">{ch.name}</span>
-        </div>
-        <span
-          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-            isSelected
-              ? "bg-indigo-500/30 text-indigo-200"
-              : "bg-slate-900 text-slate-400 group-hover:bg-slate-800"
-          }`}
-        >
-          {ch.posts.length}
-        </span>
+        <Icon className="h-4 w-4 shrink-0 opacity-80" />
+        <span className="min-w-0 flex-1 truncate">{ch.name}</span>
+        <span className="text-meta text-ink-muted">{ch.posts.length}</span>
       </button>
     );
   };
 
   return (
-    <aside className="flex h-full w-56 xl:w-64 shrink-0 flex-col border-r border-slate-800/90 bg-slate-950 select-none">
-      {/* Server Header */}
-      <div className="border-b border-slate-800/90 p-3.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-600/20 text-indigo-400 ring-1 ring-indigo-500/30">
-              <Server className="h-4 w-4" />
-            </div>
-            <h1 className="truncate text-sm font-bold text-white">
-              {currentBackup?.name || "Chat Server Backup"}
-            </h1>
-          </div>
+    <aside className="flex h-full w-full flex-col bg-surface-1 select-none">
+      {/* Header */}
+      <div className="flex h-12 shrink-0 items-center gap-1 border-b border-line pl-3.5 pr-1.5">
+        <h1
+          className="min-w-0 flex-1 truncate text-title text-ink"
+          title={currentBackup?.name || "Chat Server Backup"}
+        >
+          {currentBackup?.name || "Chat Server Backup"}
+        </h1>
+        <button
+          type="button"
+          onClick={() => onOpenSettings?.()}
+          title="Settings (Ctrl+,)"
+          aria-label="Settings"
+          className="rounded-md p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+        {onCollapse && (
           <button
             type="button"
-            onClick={() => {
-              if (onOpenSettings) {
-                onOpenSettings();
-              } else {
-                setRootInput(backupRootPath);
-                setAuthorInput(localAuthorName);
-                setEditingRoot((v) => !v);
-              }
-            }}
-            title="Open Settings (Ctrl+,)"
-            aria-label="Open Settings"
-            className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] font-medium text-slate-300 hover:border-slate-700 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
+            onClick={onCollapse}
+            title="Hide sidebar (Ctrl+B)"
+            aria-label="Hide sidebar"
+            className="rounded-md p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
           >
-            <Settings className="h-3.5 w-3.5 text-indigo-400" />
-            <span>Settings</span>
+            <PanelLeftClose className="h-4 w-4" />
           </button>
-        </div>
-
-        {/* Status Badge & Explicit Save / Delete Edited Backup Controls */}
-        {currentBackup && (
-          <div className="mt-2.5 space-y-1.5">
-            <div className="flex items-center gap-1.5">
-              {hasUnsavedChanges ? (
-                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-amber-500/20 px-2.5 py-1 text-[11px] font-semibold text-amber-200 ring-1 ring-amber-400/40">
-                  <PencilLine className="h-3.5 w-3.5 shrink-0 text-amber-300" />
-                  <span className="truncate">Unsaved Changes (Not Saved Yet)</span>
-                </span>
-              ) : currentBackup.is_edited ? (
-                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-indigo-500/15 px-2.5 py-1 text-[11px] font-medium text-indigo-300 ring-1 ring-indigo-500/30">
-                  <PencilLine className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Edited Backup</span>
-                </span>
-              ) : (
-                <span className="inline-flex w-full items-center gap-1.5 rounded-md bg-emerald-500/15 px-2.5 py-1 text-[11px] font-medium text-emerald-300 ring-1 ring-emerald-500/30">
-                  <Lock className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">Original Backup (Immutable)</span>
-                </span>
-              )}
-            </div>
-
-            {hasUnsavedChanges && onSaveChanges && (
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => onSaveChanges()}
-                  title="Save changes to the Edited backup (Ctrl+S)"
-                  className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-indigo-600 px-2.5 py-1.5 text-[11px] font-semibold text-white shadow-sm hover:bg-indigo-500 transition-colors cursor-pointer"
-                >
-                  <Save className="h-3.5 w-3.5" />
-                  <span>Save (Ctrl+S)</span>
-                </button>
-                {onDiscardChanges && (
-                  <button
-                    type="button"
-                    onClick={onDiscardChanges}
-                    title="Discard unsaved session changes"
-                    className="flex items-center justify-center gap-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1.5 text-[11px] font-medium text-slate-300 hover:border-slate-700 hover:bg-slate-800 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <RotateCcw className="h-3 w-3" />
-                    <span>Discard</span>
-                  </button>
-                )}
-              </div>
-            )}
-
-            {canDeleteEditedBackup && onDeleteEditedBackup && (
-              <button
-                type="button"
-                onClick={() => onDeleteEditedBackup()}
-                title="Delete the saved Edited backup for this date and return to Original"
-                className="flex w-full items-center justify-center gap-1.5 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1 text-[11px] font-medium text-rose-300 hover:border-rose-500/50 hover:bg-rose-500/20 hover:text-rose-200 transition-colors cursor-pointer"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span>Delete Edited Backup</span>
-              </button>
-            )}
-          </div>
         )}
+      </div>
 
-        {/* Export Bot Control & Visual Status Cue */}
-        {(() => {
-          const state = botStatus?.state ?? "stopped";
-          const isRunning =
-            state === "starting" ||
-            state === "connected" ||
-            state === "exporting" ||
-            state === "completed";
-
-          const badgeConfig = (() => {
-            switch (state) {
-              case "starting":
-                return {
-                  label: "Starting…",
-                  dotClass: "bg-amber-400 animate-pulse",
-                  pillClass:
-                    "bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30",
-                };
-              case "connected":
-                return {
-                  label: "Connected",
-                  dotClass: "bg-emerald-400 animate-pulse",
-                  pillClass:
-                    "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30",
-                };
-              case "exporting":
-                return {
-                  label: "Exporting…",
-                  dotClass: "bg-indigo-400 animate-pulse",
-                  pillClass:
-                    "bg-indigo-500/20 text-indigo-200 ring-1 ring-indigo-400/40",
-                };
-              case "completed":
-                return {
-                  label: "Export Complete",
-                  dotClass: "bg-emerald-400",
-                  pillClass:
-                    "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/40",
-                };
-              case "error":
-                return {
-                  label: "Error",
-                  dotClass: "bg-rose-400",
-                  pillClass:
-                    "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/30",
-                };
-              default:
-                return {
-                  label: "Stopped",
-                  dotClass: "bg-slate-500",
-                  pillClass:
-                    "bg-slate-800/90 text-slate-400 ring-1 ring-slate-700/60",
-                };
-            }
-          })();
-
-          return (
-            <div className="mt-2.5 rounded-lg border border-slate-800/90 bg-slate-900/50 p-2">
-              <div className="flex flex-wrap items-center justify-between gap-1.5">
-                <div className="flex min-w-0 items-center gap-1.5">
-                  <Bot className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-300">
-                    Export Bot
-                  </span>
-                  <span
-                    className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${badgeConfig.pillClass}`}
-                  >
-                    <span
-                      className={`h-1.5 w-1.5 rounded-full ${badgeConfig.dotClass}`}
-                    />
-                    <span>{badgeConfig.label}</span>
-                  </span>
-                </div>
-
-                {isRunning ? (
-                  <button
-                    type="button"
-                    onClick={() => onStopExportBot?.()}
-                    title="Stop the running export bot"
-                    aria-label="Stop Export Bot"
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md border border-rose-500/30 bg-rose-500/15 px-2 py-0.5 text-[10px] font-semibold text-rose-200 hover:bg-rose-600 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <Square className="h-2.5 w-2.5 fill-current" />
-                    <span>Stop</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => onStartExportBot?.()}
-                    title="Start export bot in background"
-                    aria-label="Start Export Bot"
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-600/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-300 ring-1 ring-emerald-500/30 hover:bg-emerald-600 hover:text-white transition-colors cursor-pointer"
-                  >
-                    <Play className="h-2.5 w-2.5 fill-current" />
-                    <span>Start Bot</span>
-                  </button>
-                )}
-              </div>
-
-              <div
-                className={`mt-1 truncate text-[10px] ${
-                  state === "error"
-                    ? "text-rose-300"
-                    : state === "exporting" || state === "completed"
-                      ? "text-indigo-200"
-                      : "text-slate-400"
-                }`}
-                title={botStatus?.status_text ?? "Bot stopped"}
-              >
-                {botStatus?.has_token_configured === false && state === "stopped" ? (
-                  <button
-                    type="button"
-                    onClick={() => onOpenSettings?.()}
-                    className="text-amber-300 underline decoration-amber-400/50 hover:text-amber-200 cursor-pointer"
-                  >
-                    Set bot token in Settings (Ctrl+,)
-                  </button>
-                ) : (
-                  botStatus?.status_text || "Bot stopped"
-                )}
-              </div>
-            </div>
-          );
-        })()}
-
-        {/* Direct Backup Folder Bar (right above Snapshot Selector) */}
-        <div className="mt-2.5">
-          <div className="mb-1 flex items-center justify-between gap-1">
-            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              <FolderOpen className="h-3 w-3" />
-              <span>Backup Folder</span>
-            </span>
-            <div className="flex items-center gap-1">
-              {onBrowseBackupRoot && (
-                <button
-                  type="button"
-                  onClick={() => onBrowseBackupRoot()}
-                  title="Browse and select a backup history folder on your PC"
-                  aria-label="Browse backup folder"
-                  className="inline-flex items-center gap-1 rounded bg-indigo-600/20 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-300 ring-1 ring-indigo-500/30 hover:bg-indigo-600 hover:text-white transition-colors cursor-pointer"
-                >
-                  <FolderSearch className="h-3 w-3" />
-                  <span>Browse…</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setRootInput(backupRootPath);
-                  setAuthorInput(localAuthorName);
-                  setEditingRoot((v) => !v);
-                }}
-                title="Edit folder path manually"
-                aria-label="Edit backup folder path"
-                className="rounded p-1 text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
-              >
-                <PencilLine className="h-3 w-3" />
-              </button>
-              {onOpenFolderInExplorer && backupRootPath && (
-                <button
-                  type="button"
-                  onClick={() => onOpenFolderInExplorer(backupRootPath)}
-                  title="Open backup folder in File Explorer"
-                  aria-label="Open backup folder in File Explorer"
-                  className="rounded p-1 text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
-                >
-                  <ExternalLink className="h-3 w-3" />
-                </button>
-              )}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (onBrowseBackupRoot) {
-                void onBrowseBackupRoot();
-              } else {
-                setRootInput(backupRootPath);
-                setAuthorInput(localAuthorName);
-                setEditingRoot((v) => !v);
-              }
-            }}
-            title={`Active backup folder: ${backupRootPath || "history"} (Click to browse)`}
-            className="flex w-full items-center justify-between gap-1.5 rounded-lg border border-slate-800/90 bg-slate-900/70 px-2.5 py-1.5 text-left font-mono text-[11px] text-slate-300 hover:border-slate-700 hover:bg-slate-900 hover:text-white transition-colors cursor-pointer"
-          >
-            <span className="truncate">{backupRootPath || "history"}</span>
-          </button>
-        </div>
-
-        {/* Inline Backup Folder & Local Author Profile Editor */}
-        {editingRoot && (
-          <form onSubmit={handleSaveRoot} className="mt-2 space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-2.5">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-400">
-                Backup history directory:
-              </label>
-              <input
-                type="text"
-                value={rootInput}
-                onChange={(e) => setRootInput(e.target.value)}
-                placeholder="history"
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
-                <UserCircle2 className="h-3 w-3 text-indigo-400" />
-                <span>Local author name:</span>
-              </label>
-              <input
-                type="text"
-                value={authorInput}
-                onChange={(e) => setAuthorInput(e.target.value)}
-                placeholder="Local User"
-                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-              />
-            </div>
-            <div className="flex justify-end gap-1.5">
-              <button
-                type="button"
-                onClick={() => setEditingRoot(false)}
-                className="rounded px-2 py-1 text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="rounded bg-indigo-600 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-indigo-500 cursor-pointer"
-              >
-                Apply
-              </button>
-            </div>
-          </form>
-        )}
-
-        {/* Snapshot Selector */}
-        <div className="mt-2.5">
-          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-            <Archive className="h-3 w-3" />
-            <span>Snapshot</span>
-          </div>
+      {/* Snapshot + search */}
+      <div className="space-y-2.5 border-b border-line px-3 py-3">
+        <div>
+          <label htmlFor="snapshot-select" className="mb-1 block text-meta text-ink-muted">
+            Snapshot
+          </label>
           <select
+            id="snapshot-select"
             aria-label="Select backup snapshot"
             value={selectedBackupPath}
             onChange={(e) => onSelectBackup(e.target.value)}
-            className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none cursor-pointer"
+            className="w-full rounded-md border border-line bg-surface-2 px-2 py-1.5 text-ui text-ink focus:border-accent focus:outline-none cursor-pointer"
           >
             {backups.length === 0 ? (
               <option value="">No backups found</option>
             ) : (
               backups.map((b) => (
                 <option key={b.json_path} value={b.json_path}>
-                  {b.display_label}
+                  {snapshotOptionLabel(b)}
                 </option>
               ))
             )}
           </select>
+          {currentBackup && (
+            <div className="mt-1.5 flex items-center justify-between gap-2 text-meta text-ink-muted">
+              <span className="inline-flex items-center gap-1.5">
+                {currentBackup.is_edited ? (
+                  <>
+                    <PencilLine className="h-3.5 w-3.5" />
+                    Edited copy
+                  </>
+                ) : (
+                  <>
+                    <Lock className="h-3.5 w-3.5" />
+                    Original · read-only
+                  </>
+                )}
+              </span>
+              {canDeleteEditedBackup && onDeleteEditedBackup && (
+                <button
+                  type="button"
+                  onClick={() => onDeleteEditedBackup()}
+                  className="rounded px-1 text-rose-400 hover:bg-surface-2 hover:text-rose-300 cursor-pointer"
+                >
+                  Delete edited copy…
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Global Search Button (Ctrl+K) */}
         <button
           type="button"
           onClick={onOpenGlobalSearch}
-          className="mt-2.5 flex w-full items-center justify-between rounded-lg border border-slate-800 bg-slate-900/70 px-2.5 py-1.5 text-xs text-slate-400 hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 transition-colors cursor-pointer"
+          className="flex w-full items-center gap-2 rounded-md border border-line bg-surface-2 px-2 py-1.5 text-ui text-ink-muted hover:text-ink cursor-pointer"
         >
-          <span className="inline-flex items-center gap-1.5">
-            <Search className="h-3.5 w-3.5 text-slate-400" />
-            <span>Search backup…</span>
-          </span>
-          <kbd className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[10px] text-slate-400">
-            Ctrl+K
-          </kbd>
+          <Search className="h-4 w-4" />
+          <span className="flex-1 text-left">Search</span>
+          <kbd className="font-sans text-meta text-ink-faint">Ctrl+K</kbd>
         </button>
       </div>
 
-      {/* Channels List */}
-      <div className="flex-1 overflow-y-auto p-2.5 space-y-4">
-        {forumChannels.length > 0 && (
-          <div>
-            <div className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Forums ({forumChannels.length})
+      {/* Channels grouped by category */}
+      <nav aria-label="Channels" className="flex-1 space-y-3 overflow-y-auto px-2 py-3">
+        {groups.map((group) => {
+          const name = group.category;
+          const collapsed = name !== null && collapsedCategories.has(name);
+          return (
+            <div key={name ?? "__none"}>
+              {name !== null && (
+                <button
+                  type="button"
+                  onClick={() => toggleCategory(name)}
+                  aria-expanded={!collapsed}
+                  className="mb-0.5 flex w-full items-center gap-1 rounded px-1 py-0.5 text-meta text-ink-muted hover:text-ink cursor-pointer"
+                >
+                  {collapsed ? (
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  )}
+                  <span className="truncate">{name}</span>
+                </button>
+              )}
+              {!collapsed && <div className="space-y-px">{group.channels.map(renderChannel)}</div>}
             </div>
-            <div className="space-y-0.5">{forumChannels.map(renderChannelButton)}</div>
-          </div>
+          );
+        })}
+        {groups.length === 0 && (
+          <p className="px-2 py-6 text-center text-ui text-ink-muted">No channels loaded.</p>
         )}
+      </nav>
 
-        {textChannels.length > 0 && (
-          <div>
-            <div className="mb-1.5 px-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">
-              Text Channels ({textChannels.length})
-            </div>
-            <div className="space-y-0.5">{textChannels.map(renderChannelButton)}</div>
-          </div>
-        )}
+      {/* Status footer: export bot + backup folder */}
+      <div className="shrink-0 space-y-1 border-t border-line px-2 py-2">
+        <div className="flex items-center gap-2 rounded-md px-1.5 py-1">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${bot.dot}`} aria-hidden="true" />
+          {needsToken ? (
+            <button
+              type="button"
+              onClick={() => onOpenSettings?.()}
+              className="min-w-0 flex-1 truncate text-left text-ui text-amber-300 hover:text-amber-200 cursor-pointer"
+            >
+              Set up export bot
+            </button>
+          ) : (
+            <span
+              className={`min-w-0 flex-1 truncate text-ui ${state === "error" ? "text-rose-300" : "text-ink-muted"}`}
+              title={botStatus?.status_text || bot.label}
+            >
+              <span className="text-ink">Export bot</span> · {bot.label}
+              {botStatus?.status_text && state !== "stopped" ? ` — ${botStatus.status_text}` : ""}
+            </span>
+          )}
+          {botRunning ? (
+            <button
+              type="button"
+              onClick={() => onStopExportBot?.()}
+              title="Stop export bot"
+              aria-label="Stop export bot"
+              className="rounded-md p-1 text-ink-muted hover:bg-surface-2 hover:text-rose-300 cursor-pointer"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onStartExportBot?.()}
+              title="Start export bot"
+              aria-label="Start export bot"
+              className="rounded-md p-1 text-ink-muted hover:bg-surface-2 hover:text-emerald-300 cursor-pointer"
+            >
+              <Play className="h-3.5 w-3.5 fill-current" />
+            </button>
+          )}
+        </div>
 
-        {channels.length === 0 && (
-          <div className="px-2 py-8 text-center text-xs text-slate-500">
-            No channels loaded.
-          </div>
-        )}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onBrowseBackupRoot?.()}
+            title={`Backup folder: ${backupRootPath || "history"} — click to choose another`}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-left text-ui text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
+          >
+            <Folder className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{backupRootPath || "history"}</span>
+          </button>
+          {onOpenFolderInExplorer && backupRootPath && (
+            <button
+              type="button"
+              onClick={() => onOpenFolderInExplorer(backupRootPath)}
+              title="Open backup folder in Explorer"
+              aria-label="Open backup folder in Explorer"
+              className="rounded-md p-1 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
+            >
+              <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
     </aside>
   );

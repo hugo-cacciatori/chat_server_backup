@@ -1,23 +1,24 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowUpDown,
-  FileText,
-  FilterX,
+  ChevronDown,
+  ChevronRight,
   Hash,
-  Image as ImageIcon,
   LayoutList,
   MessageSquare,
-  Music,
+  PanelLeftClose,
   Paperclip,
   Plus,
+  Rows3,
+  Rows4,
   Search,
-  Tag,
   X,
 } from "lucide-react";
 import type { Channel, PostOrThread } from "../types/backup";
+import { formatShortDate, plainTextSnippet } from "../lib/ui";
 
-export type PostSortMode = "recent" | "title" | "messages";
+export type PostSortMode = "recent" | "oldest" | "title" | "messages";
 export type TagMatchMode = "any" | "all";
+type Density = "comfortable" | "compact";
 
 interface PostListPaneProps {
   channel: Channel | null;
@@ -38,40 +39,25 @@ interface PostListPaneProps {
     tagIds: string[],
     attachmentPaths: string[],
   ) => Promise<void> | void;
+  onCollapse?: () => void;
 }
 
-const IMG_EXT = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"]);
-const AUDIO_EXT = new Set(["mp3", "flac", "wav", "ogg", "m4a"]);
-const DOC_EXT = new Set(["pdf", "docx", "txt", "py", "tex", "7z", "zip"]);
+const DENSITY_KEY = "csb.postDensity";
 
-function getPostLatestEpoch(post: PostOrThread): number {
+function postActivityRange(post: PostOrThread): { first: number; latest: number; latestIso: string } {
+  let first = Number.POSITIVE_INFINITY;
   let latest = 0;
+  let latestIso = "";
   for (const m of post.messages) {
-    if (m.timestamp) {
-      const t = Date.parse(m.timestamp);
-      if (!Number.isNaN(t) && t > latest) {
-        latest = t;
-      }
+    const t = Date.parse(m.timestamp);
+    if (Number.isNaN(t)) continue;
+    if (t < first) first = t;
+    if (t > latest) {
+      latest = t;
+      latestIso = m.timestamp;
     }
   }
-  return latest;
-}
-
-function summarizePostAttachments(post: PostOrThread) {
-  let images = 0;
-  let audio = 0;
-  let docs = 0;
-  let other = 0;
-  for (const m of post.messages) {
-    for (const a of m.attachments) {
-      const ext = a.extension.toLowerCase();
-      if (IMG_EXT.has(ext)) images += 1;
-      else if (AUDIO_EXT.has(ext)) audio += 1;
-      else if (DOC_EXT.has(ext)) docs += 1;
-      else other += 1;
-    }
-  }
-  return { images, audio, docs, other, total: images + audio + docs + other };
+  return { first: Number.isFinite(first) ? first : 0, latest, latestIso };
 }
 
 export function filterAndSortPosts(
@@ -86,20 +72,12 @@ export function filterAndSortPosts(
   const filtered = posts.filter((post) => {
     if (activeTagIds.size > 0) {
       const postTagSet = new Set(post.applied_tags.map((t) => t.id));
-      if (tagMatchMode === "all") {
-        for (const reqId of activeTagIds) {
-          if (!postTagSet.has(reqId)) return false;
-        }
-      } else {
-        let matchedOne = false;
-        for (const reqId of activeTagIds) {
-          if (postTagSet.has(reqId)) {
-            matchedOne = true;
-            break;
-          }
-        }
-        if (!matchedOne) return false;
-      }
+      const required = [...activeTagIds];
+      const matches =
+        tagMatchMode === "all"
+          ? required.every((id) => postTagSet.has(id))
+          : required.some((id) => postTagSet.has(id));
+      if (!matches) return false;
     }
 
     if (!q) return true;
@@ -113,22 +91,30 @@ export function filterAndSortPosts(
     );
   });
 
-  const sorted = [...filtered];
-  sorted.sort((a, b) => {
-    // Keep main channel stream at the top in text channels
+  return [...filtered].sort((a, b) => {
+    // Keep the main channel stream at the top in text channels
     if (a.type === "channel_stream" && b.type !== "channel_stream") return -1;
     if (b.type === "channel_stream" && a.type !== "channel_stream") return 1;
 
-    if (sortMode === "title") {
-      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    switch (sortMode) {
+      case "title":
+        return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+      case "messages":
+        return b.messages.length - a.messages.length;
+      case "oldest":
+        return postActivityRange(a).first - postActivityRange(b).first;
+      default:
+        return postActivityRange(b).latest - postActivityRange(a).latest;
     }
-    if (sortMode === "messages") {
-      return b.messages.length - a.messages.length;
-    }
-    return getPostLatestEpoch(b) - getPostLatestEpoch(a);
   });
+}
 
-  return sorted;
+function loadDensity(): Density {
+  try {
+    return localStorage.getItem(DENSITY_KEY) === "compact" ? "compact" : "comfortable";
+  } catch {
+    return "comfortable";
+  }
 }
 
 export function PostListPane({
@@ -145,7 +131,10 @@ export function PostListPane({
   onChangeSortMode,
   onSelectPost,
   onCreatePost,
+  onCollapse,
 }: PostListPaneProps) {
+  const [density, setDensity] = useState<Density>(loadDensity);
+  const [tagsOpen, setTagsOpen] = useState(false);
   const [creatingPost, setCreatingPost] = useState(false);
   const [newPostTitle, setNewPostTitle] = useState("");
   const [newPostBody, setNewPostBody] = useState("");
@@ -153,51 +142,38 @@ export function PostListPane({
   const [newPostAttInput, setNewPostAttInput] = useState("");
   const [newPostAttPaths, setNewPostAttPaths] = useState<string[]>([]);
   const [submittingPost, setSubmittingPost] = useState(false);
+  const filterRef = useRef<HTMLInputElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
-  const allPosts = channel?.posts ?? [];
+  const allPosts = useMemo(() => channel?.posts ?? [], [channel]);
   const availableTags = channel?.available_tags ?? [];
+  const isForum = channel?.type === "forum";
 
-  const handleToggleNewPostTag = (tagId: string) => {
-    setNewPostTagIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(tagId)) next.delete(tagId);
-      else next.add(tagId);
-      return next;
-    });
-  };
-
-  const handleAddNewPostAtt = () => {
-    const p = newPostAttInput.trim();
-    if (!p) return;
-    setNewPostAttPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
-    setNewPostAttInput("");
-  };
-
-  const handleCreatePostSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!onCreatePost || submittingPost) return;
-    const title = newPostTitle.trim();
-    const body = newPostBody.trim();
-    if (!title || (!body && newPostAttPaths.length === 0)) return;
-
-    setSubmittingPost(true);
+  useEffect(() => {
     try {
-      await onCreatePost(
-        title,
-        body,
-        Array.from(newPostTagIds),
-        newPostAttPaths,
-      );
-      setNewPostTitle("");
-      setNewPostBody("");
-      setNewPostTagIds(new Set());
-      setNewPostAttPaths([]);
-      setNewPostAttInput("");
-      setCreatingPost(false);
-    } finally {
-      setSubmittingPost(false);
+      localStorage.setItem(DENSITY_KEY, density);
+    } catch {
+      // Storage unavailable: keep the choice for this session only.
     }
-  };
+  }, [density]);
+
+  // On channel change, the tag filter starts open only when a tag filter is already active.
+  const activeTagCount = activeTagIds.size;
+  const channelId = channel?.id;
+  useEffect(() => setTagsOpen(activeTagCount > 0), [channelId]);
+
+  // Ctrl+Shift+F focuses the post filter (Ctrl+F belongs to the message search).
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.code === "KeyF") {
+        e.preventDefault();
+        filterRef.current?.focus();
+        filterRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
 
   const tagCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -210,173 +186,199 @@ export function PostListPane({
   }, [allPosts]);
 
   const filteredPosts = useMemo(
-    () =>
-      filterAndSortPosts(
-        allPosts,
-        postQuery,
-        activeTagIds,
-        tagMatchMode,
-        sortMode,
-      ),
+    () => filterAndSortPosts(allPosts, postQuery, activeTagIds, tagMatchMode, sortMode),
     [allPosts, postQuery, activeTagIds, tagMatchMode, sortMode],
   );
 
+  // The selected post is always scrolled into view (SPEC §7.6).
+  useEffect(() => {
+    listRef.current
+      ?.querySelector<HTMLElement>(`[data-post-id="${CSS.escape(selectedPostId)}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [selectedPostId, filteredPosts]);
+
+  const resetNewPost = () => {
+    setNewPostTitle("");
+    setNewPostBody("");
+    setNewPostTagIds(new Set());
+    setNewPostAttPaths([]);
+    setNewPostAttInput("");
+    setCreatingPost(false);
+  };
+
+  const handleCreatePostSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!onCreatePost || submittingPost) return;
+    const title = newPostTitle.trim();
+    const body = newPostBody.trim();
+    if (!title || (!body && newPostAttPaths.length === 0)) return;
+    setSubmittingPost(true);
+    try {
+      await onCreatePost(title, body, Array.from(newPostTagIds), newPostAttPaths);
+      resetNewPost();
+    } finally {
+      setSubmittingPost(false);
+    }
+  };
+
   if (!channel) {
     return (
-      <aside className="flex h-full w-64 xl:w-80 shrink-0 flex-col items-center justify-center border-r border-slate-800/90 bg-slate-900/50 p-6 text-center text-xs text-slate-500">
-        Select a channel on the left.
+      <aside className="flex h-full w-full flex-col items-center justify-center bg-surface-1 p-6 text-center text-ui text-ink-muted">
+        Select a channel.
       </aside>
     );
   }
 
-  const isForum = channel.type === "forum";
   const HeaderIcon = isForum ? LayoutList : Hash;
+  const filtersActive = postQuery.trim() !== "" || activeTagIds.size > 0;
+  const noun = isForum ? "post" : "thread";
 
   return (
-    <aside className="flex h-full w-64 xl:w-80 shrink-0 flex-col border-r border-slate-800/90 bg-slate-900/40 select-none">
-      {/* Channel Header */}
-      <div className="border-b border-slate-800/90 p-3.5">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex min-w-0 items-center gap-2">
-            <HeaderIcon className="h-4 w-4 shrink-0 text-indigo-400" />
-            <h2 className="truncate text-sm font-bold text-white">
-              {channel.name}
-            </h2>
-          </div>
-          <div className="flex shrink-0 items-center gap-1.5">
-            {onCreatePost && (
-              <button
-                type="button"
-                onClick={() => setCreatingPost((v) => !v)}
-                title={isForum ? "Create new forum post" : "Create new thread"}
-                className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-indigo-500 cursor-pointer"
-              >
-                <Plus className="h-3 w-3" />
-                <span>{isForum ? "New Post" : "New Thread"}</span>
-              </button>
-            )}
-            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[11px] font-medium text-slate-300">
-              {filteredPosts.length} / {allPosts.length}
-            </span>
-          </div>
-        </div>
+    <aside className="flex h-full w-full flex-col bg-surface-1 select-none">
+      {/* Header */}
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-line pl-3.5 pr-1.5">
+        <HeaderIcon className="h-4 w-4 shrink-0 text-ink-muted" />
+        <h2 className="min-w-0 flex-1 truncate text-heading text-ink" title={channel.name}>
+          {channel.name}
+        </h2>
+        <span className="text-meta text-ink-muted" title="Shown / total">
+          {filteredPosts.length === allPosts.length
+            ? allPosts.length
+            : `${filteredPosts.length} / ${allPosts.length}`}
+        </span>
+        {onCreatePost && (
+          <button
+            type="button"
+            onClick={() => setCreatingPost((v) => !v)}
+            title={`New ${noun}`}
+            aria-label={`New ${noun}`}
+            aria-expanded={creatingPost}
+            className="rounded-md p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        )}
+        {onCollapse && (
+          <button
+            type="button"
+            onClick={onCollapse}
+            title="Hide post list (Ctrl+Shift+B)"
+            aria-label="Hide post list"
+            className="rounded-md p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        )}
+      </div>
 
-        {/* Inline New Post / Thread Form */}
+      <div className="shrink-0 space-y-2 border-b border-line px-3 py-2.5">
+        {/* New post form */}
         {creatingPost && onCreatePost && (
           <form
             onSubmit={handleCreatePostSubmit}
-            className="mt-3 space-y-2 rounded-xl border border-indigo-500/40 bg-slate-950/90 p-2.5"
+            aria-label={`New ${noun}`}
+            className="space-y-2 rounded-[10px] border border-line bg-surface-2 p-2.5"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-indigo-300">
-                {isForum ? "Create Forum Post" : "Create Thread"}
-              </span>
-              <button
-                type="button"
-                aria-label="Close new post form"
-                onClick={() => setCreatingPost(false)}
-                className="text-slate-400 hover:text-white cursor-pointer"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
             <input
               type="text"
               value={newPostTitle}
               onChange={(e) => setNewPostTitle(e.target.value)}
-              placeholder="Post / thread title…"
+              placeholder="Title"
+              aria-label="Title"
               required
-              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+              autoFocus
+              className="w-full rounded-md border border-line bg-surface-0 px-2 py-1.5 text-ui text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
             />
-
             {isForum && availableTags.length > 0 && (
-              <div className="flex flex-wrap gap-1">
+              <div className="flex flex-wrap gap-1" role="group" aria-label="Tags for the new post">
                 {availableTags.map((tag) => {
                   const selected = newPostTagIds.has(tag.id);
                   return (
                     <button
                       key={tag.id}
                       type="button"
-                      onClick={() => handleToggleNewPostTag(tag.id)}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium cursor-pointer ${
-                        selected
-                          ? "bg-indigo-600 text-white"
-                          : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+                      aria-pressed={selected}
+                      onClick={() =>
+                        setNewPostTagIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(tag.id)) next.delete(tag.id);
+                          else next.add(tag.id);
+                          return next;
+                        })
+                      }
+                      className={`rounded-md px-2 py-0.5 text-meta cursor-pointer ${
+                        selected ? "bg-accent-strong text-white" : "bg-surface-3 text-ink-muted hover:text-ink"
                       }`}
                     >
-                      {tag.emoji && <span>{tag.emoji}</span>}
-                      <span>{tag.name}</span>
+                      {tag.emoji ? `${tag.emoji} ` : ""}
+                      {tag.name}
                     </button>
                   );
                 })}
               </div>
             )}
-
             <textarea
               value={newPostBody}
               onChange={(e) => setNewPostBody(e.target.value)}
-              placeholder="Starter message (markdown supported)…"
+              placeholder="First message (markdown)"
+              aria-label="First message"
               rows={3}
-              className="w-full rounded-lg border border-slate-800 bg-slate-900 px-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+              className="w-full resize-y rounded-md border border-line bg-surface-0 px-2 py-1.5 text-ui text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
             />
-
             <div className="flex items-center gap-1">
               <input
                 type="text"
                 value={newPostAttInput}
                 onChange={(e) => setNewPostAttInput(e.target.value)}
-                placeholder="Attach local file path (optional)…"
-                className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-[11px] text-slate-200 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+                placeholder="Attach a file by path (optional)"
+                aria-label="Attachment file path"
+                className="min-w-0 flex-1 rounded-md border border-line bg-surface-0 px-2 py-1 text-ui text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
               />
               <button
                 type="button"
-                onClick={handleAddNewPostAtt}
-                className="rounded-md bg-slate-800 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-700 cursor-pointer"
+                onClick={() => {
+                  const p = newPostAttInput.trim();
+                  if (!p) return;
+                  setNewPostAttPaths((prev) => (prev.includes(p) ? prev : [...prev, p]));
+                  setNewPostAttInput("");
+                }}
+                className="rounded-md bg-surface-3 px-2 py-1 text-ui text-ink hover:text-white cursor-pointer"
               >
                 Attach
               </button>
             </div>
-
             {newPostAttPaths.length > 0 && (
-              <div className="flex flex-wrap gap-1">
+              <ul className="space-y-1">
                 {newPostAttPaths.map((p) => (
-                  <span
-                    key={p}
-                    className="inline-flex items-center gap-1 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] text-indigo-200"
-                  >
-                    <span className="max-w-[180px] truncate">{p}</span>
+                  <li key={p} className="flex items-center gap-1.5 text-meta text-ink-muted">
+                    <Paperclip className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate" title={p}>
+                      {p}
+                    </span>
                     <button
                       type="button"
                       aria-label="Remove attachment"
-                      onClick={() =>
-                        setNewPostAttPaths((prev) => prev.filter((x) => x !== p))
-                      }
-                      className="text-indigo-300 hover:text-white cursor-pointer"
+                      onClick={() => setNewPostAttPaths((prev) => prev.filter((x) => x !== p))}
+                      className="rounded p-0.5 hover:bg-surface-3 hover:text-ink cursor-pointer"
                     >
-                      <X className="h-2.5 w-2.5" />
+                      <X className="h-3.5 w-3.5" />
                     </button>
-                  </span>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
-
-            <div className="flex justify-end gap-1.5 pt-1">
+            <div className="flex justify-end gap-1.5">
               <button
                 type="button"
-                onClick={() => setCreatingPost(false)}
-                className="rounded-md px-2 py-1 text-[11px] text-slate-400 hover:text-white cursor-pointer"
+                onClick={resetNewPost}
+                className="rounded-md px-2.5 py-1 text-ui text-ink-muted hover:bg-surface-3 hover:text-ink cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                disabled={
-                  submittingPost ||
-                  !newPostTitle.trim() ||
-                  (!newPostBody.trim() && newPostAttPaths.length === 0)
-                }
-                className="rounded-md bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-40 cursor-pointer"
+                disabled={submittingPost || !newPostTitle.trim() || (!newPostBody.trim() && newPostAttPaths.length === 0)}
+                className="rounded-md bg-accent-strong px-3 py-1 text-ui font-semibold text-white hover:bg-accent disabled:opacity-40 cursor-pointer disabled:cursor-default"
               >
                 Create
               </button>
@@ -384,194 +386,208 @@ export function PostListPane({
           </form>
         )}
 
-        {/* Search & Sort Controls */}
-        <div className="mt-2.5 flex items-center gap-1.5">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-500" />
+        {/* Filter, sort, density */}
+        <div className="flex items-center gap-1.5">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-faint" />
             <input
+              ref={filterRef}
               type="text"
               value={postQuery}
               onChange={(e) => onChangePostQuery(e.target.value)}
-              placeholder={isForum ? "Filter posts…" : "Filter threads…"}
-              className="w-full rounded-lg border border-slate-800 bg-slate-950/90 pl-8 pr-2.5 py-1.5 text-xs text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+              placeholder={`Filter ${noun}s`}
+              aria-label={`Filter ${noun}s (Ctrl+Shift+F)`}
+              className="w-full rounded-md border border-line bg-surface-2 py-1.5 pl-7 pr-2 text-ui text-ink placeholder:text-ink-faint focus:border-accent focus:outline-none"
             />
           </div>
-          <div className="relative flex items-center">
-            <ArrowUpDown className="pointer-events-none absolute left-2 h-3 w-3 text-slate-400" />
-            <select
-              aria-label="Sort posts"
-              value={sortMode}
-              onChange={(e) => onChangeSortMode(e.target.value as PostSortMode)}
-              className="rounded-lg border border-slate-800 bg-slate-950/90 pl-6 pr-2 py-1.5 text-[11px] text-slate-300 focus:border-indigo-500 focus:outline-none cursor-pointer"
-            >
-              <option value="recent">Recent</option>
-              <option value="title">A–Z</option>
-              <option value="messages">Messages</option>
-            </select>
-          </div>
+          <select
+            aria-label="Sort posts"
+            value={sortMode}
+            onChange={(e) => onChangeSortMode(e.target.value as PostSortMode)}
+            className="max-w-[8.5rem] rounded-md border border-line bg-surface-2 px-1.5 py-1.5 text-ui text-ink focus:border-accent focus:outline-none cursor-pointer"
+          >
+            <option value="recent">Recent activity</option>
+            <option value="oldest">Oldest first</option>
+            <option value="title">A–Z</option>
+            <option value="messages">Most messages</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => setDensity((d) => (d === "compact" ? "comfortable" : "compact"))}
+            title={density === "compact" ? "Comfortable rows" : "Compact rows"}
+            aria-label={density === "compact" ? "Switch to comfortable rows" : "Switch to compact rows"}
+            className="rounded-md p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
+          >
+            {density === "compact" ? <Rows3 className="h-4 w-4" /> : <Rows4 className="h-4 w-4" />}
+          </button>
         </div>
 
-        {/* Forum Tag Filter Bar */}
+        {/* Collapsible tag filter (forums) */}
         {isForum && availableTags.length > 0 && (
-          <div className="mt-3 rounded-lg border border-slate-800/90 bg-slate-950/60 p-2">
-            <div className="mb-1.5 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-              <span className="inline-flex items-center gap-1">
-                <Tag className="h-3 w-3 text-indigo-400" />
-                <span>Tags</span>
-              </span>
-              <div className="flex items-center gap-1.5">
+          <div>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setTagsOpen((v) => !v)}
+                aria-expanded={tagsOpen}
+                className="flex flex-1 items-center gap-1 rounded px-0.5 py-0.5 text-meta text-ink-muted hover:text-ink cursor-pointer"
+              >
+                {tagsOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                Tags
+                {activeTagIds.size > 0 && <span className="text-accent">· {activeTagIds.size} active</span>}
+              </button>
+              {activeTagIds.size > 0 && (
                 <button
                   type="button"
-                  onClick={() =>
-                    onChangeTagMatchMode(tagMatchMode === "any" ? "all" : "any")
-                  }
-                  title="Toggle matching ANY vs ALL selected tags"
-                  className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-300 hover:bg-slate-700 cursor-pointer"
+                  onClick={onClearTags}
+                  className="rounded px-1 text-meta text-ink-muted hover:text-ink cursor-pointer"
                 >
-                  Match: {tagMatchMode.toUpperCase()}
+                  Clear
                 </button>
-                {activeTagIds.size > 0 && (
-                  <button
-                    type="button"
-                    onClick={onClearTags}
-                    title="Clear tag filters"
-                    className="inline-flex items-center gap-0.5 rounded bg-rose-500/20 px-1.5 py-0.5 text-[10px] text-rose-300 hover:bg-rose-500/30 cursor-pointer"
-                  >
-                    <FilterX className="h-2.5 w-2.5" />
-                    <span>Clear</span>
-                  </button>
-                )}
-              </div>
+              )}
             </div>
-            <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto pt-0.5">
-              {availableTags.map((tag) => {
-                const isActive = activeTagIds.has(tag.id);
-                const count = tagCounts.get(tag.id) ?? 0;
-                return (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    onClick={() => onToggleTag(tag.id)}
-                    aria-pressed={isActive}
-                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all cursor-pointer ${
-                      isActive
-                        ? "bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400"
-                        : "bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white"
-                    }`}
-                  >
-                    {tag.emoji && <span>{tag.emoji}</span>}
-                    <span>{tag.name}</span>
-                    <span
-                      className={`text-[10px] ${
-                        isActive ? "text-indigo-200" : "text-slate-500"
+            {tagsOpen && (
+              <div className="mt-1.5 space-y-2">
+                <div className="flex max-h-32 flex-wrap gap-1 overflow-y-auto" role="group" aria-label="Filter by tag">
+                  {availableTags.map((tag) => {
+                    const isActive = activeTagIds.has(tag.id);
+                    return (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        onClick={() => onToggleTag(tag.id)}
+                        aria-pressed={isActive}
+                        className={`rounded-md px-2 py-0.5 text-meta cursor-pointer ${
+                          isActive ? "bg-accent-strong text-white" : "bg-surface-2 text-ink-muted hover:text-ink"
+                        }`}
+                      >
+                        {tag.emoji ? `${tag.emoji} ` : ""}
+                        {tag.name}
+                        <span className={isActive ? "text-white/70" : "text-ink-faint"}> {tagCounts.get(tag.id) ?? 0}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="inline-flex rounded-md bg-surface-2 p-0.5 text-meta" role="group" aria-label="Tag match mode">
+                  {(["any", "all"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      aria-pressed={tagMatchMode === mode}
+                      onClick={() => onChangeTagMatchMode(mode)}
+                      className={`rounded px-2 py-0.5 cursor-pointer ${
+                        tagMatchMode === mode ? "bg-surface-3 text-ink" : "text-ink-muted hover:text-ink"
                       }`}
                     >
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                      Match {mode}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Scrollable Post Cards */}
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+      {/* Post rows */}
+      <div ref={listRef} className="flex-1 overflow-y-auto p-1.5" aria-label={isForum ? "Posts" : "Threads"}>
         {filteredPosts.length === 0 ? (
-          <div className="px-4 py-12 text-center text-xs text-slate-500">
-            No matching posts found.
+          <div className="px-4 py-12 text-center text-ui text-ink-muted">
+            {filtersActive ? (
+              <>
+                <p>No {noun}s match your filters.</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChangePostQuery("");
+                    onClearTags();
+                  }}
+                  className="mt-2 rounded-md bg-surface-2 px-2.5 py-1 text-ui text-ink hover:bg-surface-3 cursor-pointer"
+                >
+                  Clear filters
+                </button>
+              </>
+            ) : (
+              <p>No {noun}s in this channel.</p>
+            )}
           </div>
         ) : (
-          filteredPosts.map((post) => {
-            const isSelected = post.id === selectedPostId;
-            const attSummary = summarizePostAttachments(post);
-            const firstMsg = post.messages[0];
-            const previewSnippet = firstMsg?.content
-              ? firstMsg.content.slice(0, 90)
-              : "";
-
-            return (
-              <button
-                key={post.id}
-                type="button"
-                onClick={() => onSelectPost(post.id)}
-                className={`group flex w-full flex-col rounded-xl border p-2.5 text-left transition-all cursor-pointer ${
-                  isSelected
-                    ? "border-indigo-500/50 bg-indigo-600/15 shadow-sm"
-                    : "border-transparent bg-slate-900/60 hover:border-slate-800 hover:bg-slate-900"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span
-                    className={`line-clamp-1 text-xs font-semibold ${
-                      isSelected ? "text-white" : "text-slate-200 group-hover:text-white"
-                    }`}
-                  >
-                    {post.name || "Untitled post"}
-                  </span>
-                </div>
-
-                {previewSnippet && (
-                  <p className="mt-1 line-clamp-1 text-[11px] text-slate-400">
-                    {previewSnippet}
-                  </p>
-                )}
-
-                {post.applied_tags.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    {post.applied_tags.map((t) => (
-                      <span
-                        key={t.id}
-                        className="inline-flex items-center gap-1 rounded-full bg-slate-800/90 px-2 py-0.5 text-[10px] font-medium text-slate-300"
-                      >
-                        {t.emoji && <span>{t.emoji}</span>}
-                        <span>{t.name}</span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-                  <span className="inline-flex items-center gap-1">
-                    <MessageSquare className="h-3 w-3 text-slate-500" />
-                    <span>{post.messages.length}</span>
-                  </span>
-
-                  {attSummary.total > 0 && (
-                    <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                      {attSummary.images > 0 && (
-                        <span className="inline-flex items-center gap-0.5" title="Images">
-                          <ImageIcon className="h-3 w-3 text-sky-400" />
-                          <span>{attSummary.images}</span>
-                        </span>
-                      )}
-                      {attSummary.audio > 0 && (
-                        <span className="inline-flex items-center gap-0.5" title="Audio">
-                          <Music className="h-3 w-3 text-emerald-400" />
-                          <span>{attSummary.audio}</span>
-                        </span>
-                      )}
-                      {attSummary.docs > 0 && (
-                        <span className="inline-flex items-center gap-0.5" title="Documents">
-                          <FileText className="h-3 w-3 text-amber-400" />
-                          <span>{attSummary.docs}</span>
-                        </span>
-                      )}
-                      {attSummary.other > 0 && (
-                        <span className="inline-flex items-center gap-0.5" title="Files">
-                          <Paperclip className="h-3 w-3 text-slate-400" />
-                          <span>{attSummary.other}</span>
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </button>
-            );
-          })
+          filteredPosts.map((post) => (
+            <PostRow
+              key={post.id}
+              post={post}
+              isSelected={post.id === selectedPostId}
+              compact={density === "compact"}
+              onSelect={() => onSelectPost(post.id)}
+            />
+          ))
         )}
       </div>
     </aside>
+  );
+}
+
+function PostRow({
+  post,
+  isSelected,
+  compact,
+  onSelect,
+}: {
+  post: PostOrThread;
+  isSelected: boolean;
+  compact: boolean;
+  onSelect: () => void;
+}) {
+  const first = post.messages[0];
+  const { latestIso } = postActivityRange(post);
+  const attachmentCount = post.messages.reduce((n, m) => n + m.attachments.length, 0);
+  const snippet = !compact && first ? plainTextSnippet(first.content, 140) : "";
+  const shownTags = post.applied_tags.slice(0, 3);
+  const hiddenTags = post.applied_tags.length - shownTags.length;
+
+  return (
+    <button
+      type="button"
+      data-post-id={post.id}
+      onClick={onSelect}
+      aria-current={isSelected ? "true" : undefined}
+      className={`relative mb-px flex w-full flex-col rounded-md px-2.5 text-left transition-colors cursor-pointer ${
+        compact ? "py-1.5" : "py-2.5"
+      } ${
+        isSelected
+          ? "bg-surface-3 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent"
+          : "hover:bg-surface-2"
+      }`}
+    >
+      <span className={`text-title text-ink ${compact ? "line-clamp-1" : "line-clamp-2"}`}>
+        {post.name || "Untitled post"}
+      </span>
+      <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-meta text-ink-muted">
+        {first && <span className="max-w-[10rem] truncate">{first.author.name}</span>}
+        {latestIso && <span>· {formatShortDate(latestIso)}</span>}
+        <span className="inline-flex items-center gap-0.5" title={`${post.messages.length} messages`}>
+          · <MessageSquare className="h-3 w-3" aria-hidden="true" />
+          {post.messages.length}
+        </span>
+        {attachmentCount > 0 && (
+          <span className="inline-flex items-center gap-0.5" title={`${attachmentCount} attachments`}>
+            · <Paperclip className="h-3 w-3" aria-hidden="true" />
+            {attachmentCount}
+          </span>
+        )}
+      </span>
+      {snippet && <span className="mt-1 line-clamp-2 text-ui text-ink-muted">{snippet}</span>}
+      {!compact && shownTags.length > 0 && (
+        <span className="mt-1.5 flex flex-wrap gap-1 text-meta text-ink-muted">
+          {shownTags.map((t) => (
+            <span key={t.id} className="rounded bg-surface-2 px-1.5">
+              {t.emoji ? `${t.emoji} ` : ""}
+              {t.name}
+            </span>
+          ))}
+          {hiddenTags > 0 && <span>+{hiddenTags}</span>}
+        </span>
+      )}
+    </button>
   );
 }

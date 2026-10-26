@@ -4,6 +4,7 @@ import type {
   BackupDescriptor,
   BackupMutationResult,
   BotRuntimeStatus,
+  PostOrThread,
   ServerBackup,
 } from "./types/backup";
 import {
@@ -19,6 +20,7 @@ import {
 import { SidebarChannels } from "./components/SidebarChannels";
 import {
   PostListPane,
+  filterAndSortPosts,
   type PostSortMode,
   type TagMatchMode,
 } from "./components/PostListPane";
@@ -30,10 +32,26 @@ import {
   type SwitchReason,
 } from "./components/UnsavedEditsPromptModal";
 import { ErrorBanner } from "./components/ErrorBanner";
+import {
+  CollapsedRail,
+  NoBackupsState,
+  PaneResizer,
+  SessionBar,
+} from "./components/LayoutShell";
+import {
+  DEFAULT_LAYOUT,
+  clampPostListWidth,
+  clampSidebarWidth,
+  fitPaneWidths,
+  loadLayout,
+  saveLayout,
+  type PaneLayout,
+} from "./lib/layout";
+import { groupChannelsByCategory } from "./lib/ui";
 import { ConfirmDialog } from "./components/ConfirmDialog";
 import { keepIfUnchanged } from "./lib/state";
 import { PdfReaderModal } from "./components/PdfReaderModal";
-import { SettingsModal } from "./components/SettingsModal";
+import { SettingsModal, type SettingsDraft } from "./components/SettingsModal";
 
 /** A switch away from the current backup, held until the user answers the unsaved-edits prompt. */
 type PendingSwitch =
@@ -52,6 +70,11 @@ interface AppSettings {
   local_author_name: string;
   local_author_id: string;
   bot_token?: string;
+}
+
+/** The post shown first when a channel opens: the top of the list in its current order (SPEC §7.6). */
+function firstPostInListOrder(posts: PostOrThread[], sortMode: PostSortMode): string {
+  return filterAndSortPosts(posts, "", new Set(), "any", sortMode)[0]?.id ?? "";
 }
 
 export function App() {
@@ -76,6 +99,18 @@ export function App() {
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
   const [isSavingForSwitch, setIsSavingForSwitch] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [discoveryDone, setDiscoveryDone] = useState<boolean>(false);
+
+  // Pane widths and collapsed state (SPEC §7.4)
+  const [layout, setLayout] = useState<PaneLayout>(loadLayout);
+  const [windowWidth, setWindowWidth] = useState<number>(() => window.innerWidth);
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+  useEffect(() => saveLayout(layout), [layout]);
+  const paneWidths = fitPaneWidths(layout, windowWidth);
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
@@ -91,6 +126,8 @@ export function App() {
   const [activeTagIds, setActiveTagIds] = useState<Set<string>>(new Set());
   const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>("any");
   const [sortMode, setSortMode] = useState<PostSortMode>("recent");
+  const sortModeRef = useRef<PostSortMode>(sortMode);
+  sortModeRef.current = sortMode;
   const [messageQuery, setMessageQuery] = useState<string>("");
   const [oldestFirst, setOldestFirst] = useState<boolean>(true);
 
@@ -153,10 +190,9 @@ export function App() {
         setMessageQuery("");
         setHighlightedMessageId(null);
 
-        const firstChannel = loaded.channels[0] ?? null;
-        const firstPost = firstChannel?.posts[0] ?? null;
+        const firstChannel = groupChannelsByCategory(loaded.channels)[0]?.channels[0] ?? null;
         const chId = firstChannel?.id ?? "";
-        const pId = firstPost?.id ?? "";
+        const pId = firstChannel ? firstPostInListOrder(firstChannel.posts, sortModeRef.current) : "";
 
         setSelectedChannelId(chId);
         setSelectedPostId(pId);
@@ -211,6 +247,7 @@ export function App() {
         );
         hasInitializedDiscoveryRef.current = true;
         setBackups((prev) => keepIfUnchanged(prev, items));
+        setDiscoveryDone(true);
         if (items.length > 0) {
           loadSnapshot(items[0].json_path);
         }
@@ -220,7 +257,7 @@ export function App() {
       });
   }, [loadSnapshot]);
 
-  // Global keyboard shortcuts: Ctrl+K (Global Search), Ctrl+, (Settings), Alt+Left (Back), Alt+Right (Forward)
+  // Global keyboard shortcuts: Ctrl+K (search), Ctrl+, (Settings), Ctrl+B / Ctrl+Shift+B (panes), Alt+Left/Right (history)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
@@ -229,6 +266,13 @@ export function App() {
       } else if ((e.ctrlKey || e.metaKey) && e.key === ",") {
         e.preventDefault();
         setSettingsOpen((open) => !open);
+      } else if ((e.ctrlKey || e.metaKey) && e.code === "KeyB") {
+        e.preventDefault();
+        setLayout((l) =>
+          e.shiftKey
+            ? { ...l, postListCollapsed: !l.postListCollapsed }
+            : { ...l, sidebarCollapsed: !l.sidebarCollapsed },
+        );
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
         if (historyIndex > 0) {
@@ -273,7 +317,7 @@ export function App() {
     setMessageQuery("");
     setHighlightedMessageId(null);
 
-    const firstPostId = ch.posts[0]?.id ?? "";
+    const firstPostId = firstPostInListOrder(ch.posts, sortMode);
     setSelectedPostId(firstPostId);
     if (firstPostId) {
       pushHistory(channelId, firstPostId, null);
@@ -344,6 +388,7 @@ export function App() {
               .map((b) => b.json_path.toLowerCase()),
           );
           hasInitializedDiscoveryRef.current = true;
+          setDiscoveryDone(true);
           setBackups((prev) => keepIfUnchanged(prev, items));
           if (items.length > 0) {
             loadSnapshot(items[0].json_path);
@@ -403,6 +448,18 @@ export function App() {
       reportError("Could not open the folder picker", err);
     }
   }, [backupRootPath, requestBackupRootChange, reportError]);
+
+  const pickFolder = useCallback(async (): Promise<string | null> => {
+    try {
+      const picked = await invoke<string | null>("pick_backup_folder", {
+        initialDir: backupRootPath || null,
+      });
+      return picked?.trim() || null;
+    } catch (err) {
+      reportError("Could not open the folder picker", err);
+      return null;
+    }
+  }, [backupRootPath, reportError]);
 
   const handleRemoveRecentBackupRoot = useCallback(async (folderPath: string) => {
     try {
@@ -692,7 +749,7 @@ export function App() {
       currentBackup,
       selectedChannelId,
       selectedPostId,
-      localAuthorName,
+      { name: localAuthorName, id: localAuthorId },
       content,
       attachmentPaths,
       replyToId,
@@ -745,7 +802,7 @@ export function App() {
         currentBackup,
         selectedChannelId,
         title,
-        localAuthorName,
+        { name: localAuthorName, id: localAuthorId },
         initialContent,
         tagIds,
         attachmentPaths,
@@ -812,105 +869,161 @@ export function App() {
     return () => window.removeEventListener("keydown", handleSaveKey);
   }, [handleSaveChanges]);
 
+  const handleSaveSettings = (draft: SettingsDraft) => {
+    if (draft.folder !== backupRootPath.trim()) requestBackupRootChange(draft.folder);
+    if (draft.authorName !== localAuthorName || draft.authorId !== localAuthorId) {
+      void handleChangeLocalAuthor(draft.authorName, draft.authorId);
+    }
+    if (draft.botToken !== botToken.trim()) void handleSaveBotToken(draft.botToken);
+  };
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-950 text-slate-100">
-      {/* Left Pane: Server & Channels */}
-      <SidebarChannels
-        backups={backups}
-        selectedBackupPath={selectedBackupPath}
-        currentBackup={currentBackup}
-        selectedChannelId={selectedChannelId}
-        backupRootPath={backupRootPath}
-        localAuthorName={localAuthorName}
-        hasUnsavedChanges={hasUnsavedChanges}
-        canDeleteEditedBackup={Boolean(currentBackup?.is_edited)}
-        botStatus={botStatus}
-        onSelectBackup={(jsonPath) =>
-          requestSnapshotSwitch(
-            jsonPath,
-            backups.find((b) => b.json_path === jsonPath)?.display_label ?? jsonPath,
-            "snapshot",
-          )
-        }
-        onSelectChannel={handleSelectChannel}
-        onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
-        onChangeBackupRoot={requestBackupRootChange}
-        onBrowseBackupRoot={handleBrowseBackupRoot}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onOpenFolderInExplorer={handleOpenFileDefault}
-        onStartExportBot={handleStartExportBot}
-        onStopExportBot={handleStopExportBot}
-        onSaveChanges={handleSaveChanges}
-        onDiscardChanges={() => setPendingConfirm("discard")}
-        onDeleteEditedBackup={() => setPendingConfirm("delete-edited")}
-        onChangeLocalAuthor={handleChangeLocalAuthor}
-      />
+    <div className="flex h-screen w-screen overflow-hidden bg-surface-0 text-ink">
+      {/* Left pane: snapshot, search, channels, status footer */}
+      {layout.sidebarCollapsed ? (
+        <CollapsedRail
+          label="sidebar"
+          shortcut="Ctrl+B"
+          onExpand={() => setLayout((l) => ({ ...l, sidebarCollapsed: false }))}
+        />
+      ) : (
+        <>
+          <div className="h-full shrink-0" style={{ width: paneWidths.sidebar }}>
+            <SidebarChannels
+              backups={backups}
+              selectedBackupPath={selectedBackupPath}
+              currentBackup={currentBackup}
+              selectedChannelId={selectedChannelId}
+              backupRootPath={backupRootPath}
+              canDeleteEditedBackup={Boolean(currentBackup?.is_edited)}
+              botStatus={botStatus}
+              onSelectBackup={(jsonPath) =>
+                requestSnapshotSwitch(
+                  jsonPath,
+                  backups.find((b) => b.json_path === jsonPath)?.display_label ?? jsonPath,
+                  "snapshot",
+                )
+              }
+              onSelectChannel={handleSelectChannel}
+              onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
+              onBrowseBackupRoot={handleBrowseBackupRoot}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenFolderInExplorer={handleOpenFileDefault}
+              onStartExportBot={handleStartExportBot}
+              onStopExportBot={handleStopExportBot}
+              onDeleteEditedBackup={() => setPendingConfirm("delete-edited")}
+              onCollapse={() => setLayout((l) => ({ ...l, sidebarCollapsed: true }))}
+            />
+          </div>
+          <PaneResizer
+            label="Resize sidebar"
+            width={paneWidths.sidebar}
+            onResize={(w) => setLayout((l) => ({ ...l, sidebarWidth: clampSidebarWidth(w) }))}
+            onReset={() => setLayout((l) => ({ ...l, sidebarWidth: DEFAULT_LAYOUT.sidebarWidth }))}
+          />
+        </>
+      )}
 
-      {/* Middle Pane: Posts / Threads & Multi-Tag Filter Bar */}
-      <PostListPane
-        channel={selectedChannel}
-        selectedPostId={selectedPostId}
-        postQuery={postQuery}
-        activeTagIds={activeTagIds}
-        tagMatchMode={tagMatchMode}
-        sortMode={sortMode}
-        onChangePostQuery={setPostQuery}
-        onToggleTag={handleToggleTag}
-        onClearTags={() => setActiveTagIds(new Set())}
-        onChangeTagMatchMode={setTagMatchMode}
-        onChangeSortMode={setSortMode}
-        onSelectPost={handleSelectPost}
-        onCreatePost={handleCreatePost}
-      />
+      {/* Middle pane: posts / threads */}
+      {layout.postListCollapsed ? (
+        <CollapsedRail
+          label="post list"
+          shortcut="Ctrl+Shift+B"
+          onExpand={() => setLayout((l) => ({ ...l, postListCollapsed: false }))}
+        />
+      ) : (
+        <>
+          <div className="h-full shrink-0" style={{ width: paneWidths.postList }}>
+            <PostListPane
+              channel={selectedChannel}
+              selectedPostId={selectedPostId}
+              postQuery={postQuery}
+              activeTagIds={activeTagIds}
+              tagMatchMode={tagMatchMode}
+              sortMode={sortMode}
+              onChangePostQuery={setPostQuery}
+              onToggleTag={handleToggleTag}
+              onClearTags={() => setActiveTagIds(new Set())}
+              onChangeTagMatchMode={setTagMatchMode}
+              onChangeSortMode={setSortMode}
+              onSelectPost={handleSelectPost}
+              onCreatePost={handleCreatePost}
+              onCollapse={() => setLayout((l) => ({ ...l, postListCollapsed: true }))}
+            />
+          </div>
+          <PaneResizer
+            label="Resize post list"
+            width={paneWidths.postList}
+            onResize={(w) => setLayout((l) => ({ ...l, postListWidth: clampPostListWidth(w) }))}
+            onReset={() => setLayout((l) => ({ ...l, postListWidth: DEFAULT_LAYOUT.postListWidth }))}
+          />
+        </>
+      )}
 
-      {/* Right Pane: Message Stream */}
-      <MessageStreamPane
-        backup={currentBackup}
-        channel={selectedChannel}
-        post={selectedPost}
-        messageQuery={messageQuery}
-        oldestFirst={oldestFirst}
-        canGoBack={historyIndex > 0}
-        canGoForward={historyIndex >= 0 && historyIndex < history.length - 1}
-        highlightedMessageId={highlightedMessageId}
-        localAuthorName={localAuthorName}
-        hasUnsavedChanges={hasUnsavedChanges}
-        onSaveChanges={handleSaveChanges}
-        onChangeMessageQuery={setMessageQuery}
-        onToggleOldestFirst={() => setOldestFirst((v) => !v)}
-        onGoBack={() => {
-          if (historyIndex > 0) {
-            const target = history[historyIndex - 1];
-            setHistoryIndex(historyIndex - 1);
-            setSelectedChannelId(target.channelId);
-            setSelectedPostId(target.postId);
-            setHighlightedMessageId(target.messageId);
-          }
-        }}
-        onGoForward={() => {
-          if (historyIndex >= 0 && historyIndex < history.length - 1) {
-            const target = history[historyIndex + 1];
-            setHistoryIndex(historyIndex + 1);
-            setSelectedChannelId(target.channelId);
-            setSelectedPostId(target.postId);
-            setHighlightedMessageId(target.messageId);
-          }
-        }}
-        onJumpToTarget={handleJumpToInternalTarget}
-        onJumpToMessageInPost={(msgId) => setHighlightedMessageId(msgId)}
-        onOpenExternalUrl={handleOpenExternalUrl}
-        onOpenImageLightbox={(src, caption, filePath) =>
-          setLightboxState({ src, caption, filePath })
-        }
-        onOpenPdfModal={(src, title, filePath) =>
-          setPdfModalState({ src, title, filePath })
-        }
-        onOpenFileDefault={handleOpenFileDefault}
-        onRevealInExplorer={handleRevealInExplorer}
-        onSendMessage={handleSendMessage}
-        onEditMessage={handleEditMessage}
-        onDeleteMessage={handleDeleteMessage}
-      />
+      {/* Right pane: session bar + messages */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {hasUnsavedChanges && currentBackup && (
+          <SessionBar
+            dateLabel={currentBackup.date_label}
+            onSave={() => void handleSaveChanges()}
+            onDiscard={() => setPendingConfirm("discard")}
+          />
+        )}
+        {discoveryDone && backups.length === 0 ? (
+          <NoBackupsState
+            folder={backupRootPath}
+            hasBotToken={botStatus.has_token_configured || Boolean(botToken.trim())}
+            onChooseFolder={() => void handleBrowseBackupRoot()}
+            onSetUpBot={() => setSettingsOpen(true)}
+            onStartBot={() => void handleStartExportBot()}
+          />
+        ) : (
+          <MessageStreamPane
+            backup={currentBackup}
+            channel={selectedChannel}
+            post={selectedPost}
+            messageQuery={messageQuery}
+            oldestFirst={oldestFirst}
+            canGoBack={historyIndex > 0}
+            canGoForward={historyIndex >= 0 && historyIndex < history.length - 1}
+            highlightedMessageId={highlightedMessageId}
+            onChangeMessageQuery={setMessageQuery}
+            onToggleOldestFirst={() => setOldestFirst((v) => !v)}
+            onGoBack={() => {
+              if (historyIndex > 0) {
+                const target = history[historyIndex - 1];
+                setHistoryIndex(historyIndex - 1);
+                setSelectedChannelId(target.channelId);
+                setSelectedPostId(target.postId);
+                setHighlightedMessageId(target.messageId);
+              }
+            }}
+            onGoForward={() => {
+              if (historyIndex >= 0 && historyIndex < history.length - 1) {
+                const target = history[historyIndex + 1];
+                setHistoryIndex(historyIndex + 1);
+                setSelectedChannelId(target.channelId);
+                setSelectedPostId(target.postId);
+                setHighlightedMessageId(target.messageId);
+              }
+            }}
+            onJumpToTarget={handleJumpToInternalTarget}
+            onJumpToMessageInPost={(msgId) => setHighlightedMessageId(msgId)}
+            onOpenExternalUrl={handleOpenExternalUrl}
+            onOpenImageLightbox={(src, caption, filePath) =>
+              setLightboxState({ src, caption, filePath })
+            }
+            onOpenPdfModal={(src, title, filePath) =>
+              setPdfModalState({ src, title, filePath })
+            }
+            onOpenFileDefault={handleOpenFileDefault}
+            onRevealInExplorer={handleRevealInExplorer}
+            onSendMessage={handleSendMessage}
+            onEditMessage={handleEditMessage}
+            onDeleteMessage={handleDeleteMessage}
+          />
+        )}
+      </div>
 
       {/* Global Search Modal (Ctrl+K) */}
       <GlobalSearchModal
@@ -955,14 +1068,10 @@ export function App() {
         botToken={botToken}
         snapshotCount={backups.length}
         onClose={() => setSettingsOpen(false)}
-        onBrowseBackupRoot={handleBrowseBackupRoot}
-        onApplyBackupRoot={requestBackupRootChange}
+        onPickFolder={pickFolder}
+        onSave={handleSaveSettings}
         onRemoveRecentBackupRoot={handleRemoveRecentBackupRoot}
         onOpenFolderInExplorer={handleOpenFileDefault}
-        onSaveAuthorProfile={(name, id) => {
-          void handleChangeLocalAuthor(name, id);
-        }}
-        onSaveBotToken={handleSaveBotToken}
       />
 
       {/* Prompt before any switch away from unsaved edits */}
@@ -979,23 +1088,23 @@ export function App() {
 
       <ConfirmDialog
         isOpen={pendingConfirm === "delete-edited"}
-        title="Delete Edited Backup?"
-        confirmLabel="Delete Edited Backup"
+        title="Delete edited copy?"
+        confirmLabel="Delete edited copy"
         onConfirm={confirmPendingAction}
         onCancel={cancelConfirm}
       >
         <p>
           This permanently removes{" "}
-          <code className="font-mono text-rose-200">
+          <code className="font-mono text-ink">
             server_export_{currentBackup?.date_label}_edited.json
           </code>{" "}
           and the{" "}
-          <code className="font-mono text-rose-200">
+          <code className="font-mono text-ink">
             assets_{currentBackup?.date_label}_edited/
           </code>{" "}
           folder, then returns to the Original backup.
         </p>
-        <p className="text-slate-400">
+        <p className="text-ink-muted">
           {hasUnsavedChanges ? "Your unsaved edits are lost too. " : ""}The Original backup is
           never touched. This cannot be undone.
         </p>
@@ -1003,14 +1112,14 @@ export function App() {
 
       <ConfirmDialog
         isOpen={pendingConfirm === "discard"}
-        title="Discard Unsaved Edits?"
-        confirmLabel="Discard Edits"
+        title="Discard unsaved changes?"
+        confirmLabel="Discard changes"
         onConfirm={confirmPendingAction}
         onCancel={cancelConfirm}
       >
         <p>
           Your unsaved edits to{" "}
-          <span className="font-semibold text-white">
+          <span className="font-semibold text-ink">
             {currentBackup?.date_label} ({currentBackup?.is_edited ? "Edited" : "Original"})
           </span>{" "}
           are dropped and the backup reloads from disk.

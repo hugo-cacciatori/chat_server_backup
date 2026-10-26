@@ -6,6 +6,20 @@ import type {
   ServerBackup,
 } from "../types/backup";
 
+/** The local author used for messages and posts created in the app (Settings → Local author). */
+export interface LocalAuthor {
+  name: string;
+  id: string;
+}
+
+function toAuthor(local: LocalAuthor): Author {
+  return {
+    id: local.id.trim() || "local-user-1",
+    name: local.name.trim() || "Local User",
+    bot: false,
+  };
+}
+
 let localIdSeq = 1;
 
 function nextLocalId(): string {
@@ -34,17 +48,13 @@ export function addMessageInMemory(
   backup: ServerBackup,
   channelId: string,
   postId: string,
-  authorName: string,
+  localAuthor: LocalAuthor,
   content: string,
   attachmentPaths: string[],
   replyToId: string | null,
 ): { backup: ServerBackup; createdMessageId: string } {
   const msgId = nextLocalId();
-  const author: Author = {
-    id: "local-user-1",
-    name: authorName.trim() || "Local User",
-    bot: false,
-  };
+  const author = toAuthor(localAuthor);
   const newMsg: Message = {
     id: msgId,
     author,
@@ -161,7 +171,7 @@ export function createPostInMemory(
   backup: ServerBackup,
   channelId: string,
   title: string,
-  authorName: string,
+  localAuthor: LocalAuthor,
   initialContent: string,
   tagIds: string[],
   attachmentPaths: string[],
@@ -169,11 +179,7 @@ export function createPostInMemory(
   const postId = nextLocalId();
   const msgId = nextLocalId();
   const tagSet = new Set(tagIds);
-  const author: Author = {
-    id: "local-user-1",
-    name: authorName.trim() || "Local User",
-    bot: false,
-  };
+  const author = toAuthor(localAuthor);
 
   const starterMsg: Message = {
     id: msgId,

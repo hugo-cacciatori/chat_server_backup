@@ -39,15 +39,15 @@ export function PdfReaderModal({
       role="dialog"
       aria-modal="true"
       onClick={onClose}
-      className="fixed inset-0 z-50 flex flex-col bg-slate-950/90 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex flex-col bg-black/85"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-5 py-2.5 text-xs"
+        className="flex items-center justify-between border-b border-line bg-surface-1 px-4 py-2"
       >
         <div className="flex min-w-0 items-center gap-2">
-          <FileText className="h-4 w-4 shrink-0 text-rose-400" />
-          <span className="truncate font-semibold text-white">{title}</span>
+          <FileText className="h-4 w-4 shrink-0 text-ink-muted" />
+          <span className="truncate font-semibold text-ink">{title}</span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -55,7 +55,7 @@ export function PdfReaderModal({
             <button
               type="button"
               onClick={() => onOpenFileDefault(filePath)}
-              className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500 cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-md bg-accent-strong px-2.5 py-1 text-ui font-medium text-white hover:bg-accent cursor-pointer"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               <span>Open in PDF App</span>
@@ -65,7 +65,7 @@ export function PdfReaderModal({
             <button
               type="button"
               onClick={() => onRevealInExplorer(filePath)}
-              className="inline-flex items-center gap-1 rounded-md bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-200 hover:bg-slate-700 cursor-pointer"
+              className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-2.5 py-1 text-ui font-medium text-ink hover:bg-surface-3 cursor-pointer"
             >
               <FolderOpen className="h-3.5 w-3.5" />
               <span>Explorer</span>
@@ -75,7 +75,7 @@ export function PdfReaderModal({
             type="button"
             onClick={onClose}
             aria-label="Close PDF reader"
-            className="ml-2 rounded-full bg-slate-800 p-1.5 text-slate-300 hover:bg-rose-500/20 hover:text-rose-300 cursor-pointer"
+            className="ml-2 rounded-md p-1.5 text-ink-muted hover:bg-surface-2 hover:text-ink cursor-pointer"
           >
             <X className="h-4 w-4" />
           </button>
@@ -84,12 +84,12 @@ export function PdfReaderModal({
 
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex-1 bg-slate-950 p-4"
+        className="flex-1 p-4"
       >
         <iframe
           src={src}
           title={title}
-          className="h-full w-full rounded-xl border border-slate-800 bg-white shadow-2xl"
+          className="h-full w-full rounded-md bg-white"
         />
       </div>
     </div>

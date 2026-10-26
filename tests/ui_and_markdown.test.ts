@@ -5,7 +5,8 @@ import { parseMarkdownBlocks, tokenizeCodeLine } from "../src/lib/markdown";
 import { parseInternalChannelUrl, resolveTargetInBackup } from "../src/lib/links";
 import { filterAndSortPosts } from "../src/components/PostListPane";
 import { moveActiveIndex, searchAcrossBackup } from "../src/components/GlobalSearchModal";
-import { cleanDisplayFilename, MessageCard } from "../src/components/MessageCard";
+import { MessageCard } from "../src/components/MessageCard";
+import { cleanDisplayFilename } from "../src/lib/ui";
 import { ConfirmDialog } from "../src/components/ConfirmDialog";
 import { keepIfUnchanged } from "../src/lib/state";
 import { SidebarChannels } from "../src/components/SidebarChannels";
@@ -15,7 +16,7 @@ import { ErrorBanner } from "../src/components/ErrorBanner";
 import {
   formatByteSize,
   formatDurationSeconds,
-} from "../src/components/MediaCards";
+} from "../src/components/Attachments";
 import {
   addMessageInMemory,
   createPostInMemory,
@@ -216,7 +217,7 @@ describe("In-Memory Session Editing (Unsaved Until Explicit Save)", () => {
       sampleBackup,
       channelId,
       "test",
-      "Hugo",
+      { name: "Hugo", id: "hugo-1" },
       "Starter body",
       ["tag_docs"],
       [],
@@ -229,7 +230,7 @@ describe("In-Memory Session Editing (Unsaved Until Explicit Save)", () => {
       afterPost,
       channelId,
       createdPostId,
-      "Hugo",
+      { name: "Hugo", id: "hugo-1" },
       "Follow-up message",
       [],
       null,
@@ -238,6 +239,7 @@ describe("In-Memory Session Editing (Unsaved Until Explicit Save)", () => {
       (p) => p.id === createdPostId,
     )!;
     expect(createdPost.messages).toHaveLength(2);
+    expect(createdPost.messages[1].author).toEqual({ id: "hugo-1", name: "Hugo", bot: false });
 
     const { backup: afterEdit } = editMessageInMemory(
       afterMsg,
@@ -265,8 +267,8 @@ describe("In-Memory Session Editing (Unsaved Until Explicit Save)", () => {
   });
 });
 
-describe("Backup Folder Controls & Settings Modal UI", () => {
-  it("renders the direct Backup Folder bar and Browse button in SidebarChannels and full SettingsModal", () => {
+describe("Sidebar & Settings (SPEC §7.5, §7.10)", () => {
+  it("renders the sidebar status footer, snapshot labels and the single-Save Settings form", () => {
     const sidebarHtml = renderToStaticMarkup(
       createElement(SidebarChannels, {
         backups: [
@@ -283,8 +285,6 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
         currentBackup: sampleBackup,
         selectedChannelId: "1542028566022201344",
         backupRootPath: "F:\\server_backup\\history",
-        localAuthorName: "Hugo",
-        hasUnsavedChanges: false,
         canDeleteEditedBackup: false,
         botStatus: {
           state: "connected",
@@ -298,7 +298,6 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
         onSelectBackup: () => {},
         onSelectChannel: () => {},
         onOpenGlobalSearch: () => {},
-        onChangeBackupRoot: () => {},
         onBrowseBackupRoot: () => {},
         onOpenSettings: () => {},
         onStartExportBot: () => {},
@@ -306,14 +305,13 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
       }),
     );
 
-    expect(sidebarHtml).toContain("Export Bot");
-    expect(sidebarHtml).toContain("Connected");
+    expect(sidebarHtml).toContain("Export bot");
     expect(sidebarHtml).toContain("Connected as ArchiveBot#4821");
-    expect(sidebarHtml).toContain("Stop");
-    expect(sidebarHtml).toContain("Backup Folder");
-    expect(sidebarHtml).toContain("Browse…");
-    expect(sidebarHtml).toContain("Settings");
+    expect(sidebarHtml).toContain('aria-label="Stop export bot"');
+    expect(sidebarHtml).toContain("2026-10-20 · Original");
+    expect(sidebarHtml).toContain("Original · read-only");
     expect(sidebarHtml).toContain("F:\\server_backup\\history");
+    expect(sidebarHtml).not.toContain("Delete edited copy");
 
     const modalHtml = renderToStaticMarkup(
       createElement(SettingsModal, {
@@ -328,21 +326,20 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
         botToken: "secret-bot-token",
         snapshotCount: 14,
         onClose: () => {},
-        onBrowseBackupRoot: () => {},
-        onApplyBackupRoot: () => {},
-        onSaveAuthorProfile: () => {},
-        onSaveBotToken: () => {},
+        onPickFolder: async () => null,
+        onSave: () => {},
       }),
     );
 
-    expect(modalHtml).toContain("Backup History Folder");
-    expect(modalHtml).toContain("Browse Folder…");
-    expect(modalHtml).toContain("14 snapshots found");
-    expect(modalHtml).toContain("Recent Backup Folders");
+    expect(modalHtml).toContain("Backup folder");
+    expect(modalHtml).toContain("Browse…");
+    expect(modalHtml).toContain("14 snapshots in the current folder");
+    expect(modalHtml).toContain("Recent folders");
     expect(modalHtml).toContain("C:\\OtherBackups\\history");
-    expect(modalHtml).toContain("Export Bot Token");
-    expect(modalHtml).toContain("Token Configured");
-    expect(modalHtml).toContain("Local Author Profile");
+    expect(modalHtml).toContain("Export bot token");
+    expect(modalHtml).toContain("Token set");
+    expect(modalHtml).toContain("Local author");
+    expect(modalHtml.match(/type="submit"/g)).toHaveLength(1);
 
     const promptHtml = renderToStaticMarkup(
       createElement(UnsavedEditsPromptModal, {

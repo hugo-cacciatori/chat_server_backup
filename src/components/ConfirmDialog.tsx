@@ -40,7 +40,7 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) onCancel();
       }}
@@ -51,30 +51,30 @@ export function ConfirmDialog({
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         tabIndex={-1}
-        className="w-full max-w-md overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl"
+        className="w-full max-w-md overflow-hidden rounded-[10px] border border-line bg-surface-1 shadow-2xl"
       >
-        <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-600/20 text-rose-400 ring-1 ring-rose-500/30">
+        <div className="flex items-center gap-2.5 border-b border-line px-5 py-3.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-rose-500/15 text-rose-400">
             <AlertTriangle className="h-4 w-4" />
           </div>
-          <h2 id="confirm-dialog-title" className="text-sm font-bold text-white">
+          <h2 id="confirm-dialog-title" className="text-heading text-ink">
             {title}
           </h2>
         </div>
-        <div className="space-y-2 p-5 text-xs leading-relaxed text-slate-200">{children}</div>
-        <div className="flex justify-end gap-2 border-t border-slate-800 bg-slate-950/60 px-5 py-3.5">
+        <div className="space-y-2 p-5 text-ui text-ink">{children}</div>
+        <div className="flex justify-end gap-2 border-t border-line px-5 py-3.5">
           <button
             ref={cancelRef}
             type="button"
             onClick={onCancel}
-            className="rounded-lg border border-slate-700 bg-slate-900 px-3.5 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 hover:text-white cursor-pointer"
+            className="rounded-md bg-surface-3 px-3.5 py-1.5 text-ui font-medium text-ink hover:bg-line cursor-pointer"
           >
             Cancel
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="rounded-lg bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-500 cursor-pointer"
+            className="rounded-md bg-rose-600 px-3.5 py-1.5 text-ui font-semibold text-white hover:bg-rose-500 cursor-pointer"
           >
             {confirmLabel}
           </button>

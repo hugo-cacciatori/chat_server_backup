@@ -1,4 +1,3 @@
-import { ExternalLink } from "lucide-react";
 import type { EmbedData, ServerBackup } from "../types/backup";
 import type { InternalServerTarget } from "../lib/links";
 import { RichContent } from "./RichContent";
@@ -14,11 +13,12 @@ interface EmbedCardProps {
 
 function formatEmbedColor(color: number | null): string {
   if (color === null || color < 0) {
-    return "#6366f1";
+    return "var(--color-line)";
   }
   return `#${(color & 0xffffff).toString(16).padStart(6, "0")}`;
 }
 
+/** Rich embed: tinted card with the embed's own colour as a left bar (SPEC §7.2 calm surfaces). */
 export function EmbedCard({
   embed,
   backup,
@@ -27,23 +27,19 @@ export function EmbedCard({
   onOpenExternalUrl,
   onOpenImageLightbox,
 }: EmbedCardProps) {
-  const borderColor = formatEmbedColor(embed.color);
+  const contentProps = { backup, searchQuery, onJumpToTarget, onOpenExternalUrl };
 
   return (
     <div
-      style={{ borderLeftColor: borderColor }}
-      className="mt-2 max-w-2xl rounded-r-lg border border-slate-800 border-l-4 bg-slate-900/80 p-3.5 shadow-sm"
+      style={{ borderLeftColor: formatEmbedColor(embed.color) }}
+      className="rounded-md border-l-4 bg-surface-1 px-3.5 py-3"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-1.5">
-          {embed.author_name && (
-            <div className="text-xs font-semibold text-slate-300">
-              {embed.author_name}
-            </div>
-          )}
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1 space-y-1">
+          {embed.author_name && <div className="text-meta font-semibold text-ink-muted">{embed.author_name}</div>}
 
           {embed.title && (
-            <div className="font-semibold text-sm">
+            <div className="text-title">
               {embed.url ? (
                 <a
                   href={embed.url}
@@ -55,67 +51,43 @@ export function EmbedCard({
                       onOpenExternalUrl(embed.url);
                     }
                   }}
-                  className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 hover:underline"
+                  className="text-accent hover:underline"
                 >
-                  <span>{embed.title}</span>
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                  {embed.title}
                 </a>
               ) : (
-                <span className="text-white">{embed.title}</span>
+                <span className="text-ink">{embed.title}</span>
               )}
             </div>
           )}
 
-          {embed.description && (
-            <div className="text-xs text-slate-300">
-              <RichContent
-                content={embed.description}
-                backup={backup}
-                searchQuery={searchQuery}
-                onJumpToTarget={onJumpToTarget}
-                onOpenExternalUrl={onOpenExternalUrl}
-              />
-            </div>
-          )}
+          {embed.description && <RichContent content={embed.description} {...contentProps} />}
 
           {embed.fields.length > 0 && (
-            <div className="mt-2 grid grid-cols-12 gap-2 pt-1">
+            <dl className="grid grid-cols-3 gap-x-4 gap-y-2 pt-1">
               {embed.fields.map((field, idx) => (
-                <div
-                  key={idx}
-                  className={field.inline ? "col-span-4 min-w-0" : "col-span-12 min-w-0"}
-                >
-                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                    {field.name}
-                  </div>
-                  <div className="mt-0.5 text-xs text-slate-200 break-words">
-                    <RichContent
-                      content={field.value}
-                      backup={backup}
-                      searchQuery={searchQuery}
-                      onJumpToTarget={onJumpToTarget}
-                      onOpenExternalUrl={onOpenExternalUrl}
-                    />
-                  </div>
+                <div key={idx} className={`min-w-0 ${field.inline ? "col-span-1" : "col-span-3"}`}>
+                  <dt className="text-meta font-semibold text-ink-muted">{field.name}</dt>
+                  <dd className="break-words">
+                    <RichContent content={field.value} {...contentProps} />
+                  </dd>
                 </div>
               ))}
-            </div>
+            </dl>
           )}
         </div>
 
         {embed.thumbnail_url && (
           <button
             type="button"
-            onClick={() =>
-              onOpenImageLightbox?.(embed.thumbnail_url, embed.title || "Thumbnail")
-            }
+            onClick={() => onOpenImageLightbox?.(embed.thumbnail_url, embed.title || "Thumbnail")}
             aria-label={`Open image ${embed.title || "thumbnail"}`}
             className="shrink-0 cursor-zoom-in"
           >
             <img
               src={embed.thumbnail_url}
               alt={embed.title || "Embed thumbnail"}
-              className="h-16 w-16 rounded-md object-cover bg-slate-950 border border-slate-800"
+              className="h-16 w-16 rounded-md bg-surface-0 object-cover"
             />
           </button>
         )}
@@ -131,16 +103,12 @@ export function EmbedCard({
           <img
             src={embed.image_url}
             alt={embed.title || "Embed image"}
-            className="max-h-72 max-w-full rounded-md object-contain bg-slate-950 border border-slate-800"
+            className="max-h-72 max-w-full rounded-md bg-surface-0 object-contain"
           />
         </button>
       )}
 
-      {embed.footer_text && (
-        <div className="mt-2 border-t border-slate-800/70 pt-1.5 text-[11px] text-slate-400">
-          {embed.footer_text}
-        </div>
-      )}
+      {embed.footer_text && <div className="mt-2 text-meta text-ink-muted">{embed.footer_text}</div>}
     </div>
   );
 }
