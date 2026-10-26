@@ -47,7 +47,9 @@ $ZipSha = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash.ToLower()
 $ExeSha = (Get-FileHash -Path $DestExe -Algorithm SHA256).Hash.ToLower()
 
 $ChecksumsPath = "$ReleaseDir\SHA256SUMS.txt"
-"$ZipSha  ChatServerBackup-v$Version-win64.zip`n$ExeSha  ChatServerBackup/ChatServerBackup.exe`n" | Set-Content -Path $ChecksumsPath -NoNewline -Encoding UTF8
+# UTF-8 without a byte-order mark and LF line endings, so `sha256sum -c` reads it
+$Checksums = "$ZipSha  ChatServerBackup-v$Version-win64.zip`n$ExeSha  ChatServerBackup/ChatServerBackup.exe`n"
+[System.IO.File]::WriteAllText($ChecksumsPath, $Checksums, (New-Object System.Text.UTF8Encoding $false))
 
 # Automatically remove superseded local dist/v* folders and clean intermediate build artifacts
 Get-ChildItem -Path "$Root\dist" -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne "v$Version" } | Remove-Item -Recurse -Force
