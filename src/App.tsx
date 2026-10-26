@@ -25,9 +25,18 @@ import {
 import { MessageStreamPane } from "./components/MessageStreamPane";
 import { GlobalSearchModal } from "./components/GlobalSearchModal";
 import { LightboxModal } from "./components/LightboxModal";
-import { NewBackupPromptModal } from "./components/NewBackupPromptModal";
+import {
+  UnsavedEditsPromptModal,
+  type SwitchReason,
+} from "./components/UnsavedEditsPromptModal";
+import { ErrorBanner } from "./components/ErrorBanner";
 import { PdfReaderModal } from "./components/PdfReaderModal";
 import { SettingsModal } from "./components/SettingsModal";
+
+/** A switch away from the current backup, held until the user answers the unsaved-edits prompt. */
+type PendingSwitch =
+  | { kind: "snapshot"; reason: SwitchReason; jsonPath: string; label: string }
+  | { kind: "folder"; reason: SwitchReason; root: string; label: string };
 
 interface NavHistoryEntry {
   channelId: string;
@@ -62,10 +71,9 @@ export function App() {
   const lastCompletedExportsRef = useRef<number>(0);
   const knownOriginalPathsRef = useRef<Set<string>>(new Set());
   const hasInitializedDiscoveryRef = useRef<boolean>(false);
-  const [pendingNewBackup, setPendingNewBackup] = useState<{
-    jsonPath: string;
-    displayLabel: string;
-  } | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
+  const [isSavingForSwitch, setIsSavingForSwitch] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedBackupPath, setSelectedBackupPath] = useState<string>("");
   const [currentBackup, setCurrentBackup] = useState<ServerBackup | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
@@ -123,15 +131,20 @@ export function App() {
     [historyIndex],
   );
 
+  const reportError = useCallback((context: string, err: unknown) => {
+    console.error(`${context}:`, err);
+    setErrorMessage(`${context}: ${String(err)}`);
+  }, []);
+
   const loadSnapshot = useCallback((jsonPath: string) => {
     if (!jsonPath) return;
-    setSelectedBackupPath(jsonPath);
-    setHasUnsavedChanges(false);
     invoke<ServerBackup>("load_backup_command", {
       jsonPath,
       sortChronological: true,
     })
       .then((loaded) => {
+        setSelectedBackupPath(jsonPath);
+        setHasUnsavedChanges(false);
         setCurrentBackup(loaded);
         setPostQuery("");
         setActiveTagIds(new Set());
@@ -153,10 +166,8 @@ export function App() {
           setHistoryIndex(-1);
         }
       })
-      .catch((err) => {
-        console.error("Failed to load backup:", err);
-      });
-  }, []);
+      .catch((err) => reportError("Could not load backup", err));
+  }, [reportError]);
 
   // Initial discovery on mount
   useEffect(() => {
@@ -318,7 +329,7 @@ export function App() {
     [currentBackup, handleNavigateToLocation],
   );
 
-  const handleChangeBackupRoot = useCallback(
+  const applyBackupRoot = useCallback(
     (newRoot: string) => {
       setBackupRootPath(newRoot);
       invoke<BackupDescriptor[]>("set_backup_root", {
@@ -331,13 +342,13 @@ export function App() {
               .map((b) => b.json_path.toLowerCase()),
           );
           hasInitializedDiscoveryRef.current = true;
-          setPendingNewBackup(null);
           setBackups(items);
           if (items.length > 0) {
             loadSnapshot(items[0].json_path);
           } else {
             setCurrentBackup(null);
             setSelectedBackupPath("");
+            setHasUnsavedChanges(false);
           }
           return invoke<AppSettings>("get_app_settings");
         })
@@ -349,9 +360,33 @@ export function App() {
             setRecentBackupRoots(cfg.recent_backup_roots);
           }
         })
-        .catch((err) => console.error("Failed to set backup root:", err));
+        .catch((err) => reportError("Could not change backup folder", err));
     },
-    [loadSnapshot],
+    [loadSnapshot, reportError],
+  );
+
+  const requestBackupRootChange = useCallback(
+    (newRoot: string) => {
+      if (hasUnsavedChanges && currentBackup) {
+        setPendingSwitch({ kind: "folder", reason: "folder", root: newRoot, label: newRoot });
+      } else {
+        applyBackupRoot(newRoot);
+      }
+    },
+    [hasUnsavedChanges, currentBackup, applyBackupRoot],
+  );
+
+  const requestSnapshotSwitch = useCallback(
+    (jsonPath: string, label: string, reason: SwitchReason) => {
+      if (!jsonPath) return;
+      if (hasUnsavedChanges && currentBackup) {
+        if (reason !== "new-backup" && jsonPath === selectedBackupPath) return;
+        setPendingSwitch({ kind: "snapshot", reason, jsonPath, label });
+      } else {
+        loadSnapshot(jsonPath);
+      }
+    },
+    [hasUnsavedChanges, currentBackup, selectedBackupPath, loadSnapshot],
   );
 
   const handleBrowseBackupRoot = useCallback(async () => {
@@ -360,12 +395,12 @@ export function App() {
         initialDir: backupRootPath || null,
       });
       if (picked && picked.trim()) {
-        handleChangeBackupRoot(picked.trim());
+        requestBackupRootChange(picked.trim());
       }
     } catch (err) {
-      console.error("Failed to pick backup folder:", err);
+      reportError("Could not open the folder picker", err);
     }
-  }, [backupRootPath, handleChangeBackupRoot]);
+  }, [backupRootPath, requestBackupRootChange, reportError]);
 
   const handleRemoveRecentBackupRoot = useCallback(async (folderPath: string) => {
     try {
@@ -376,25 +411,25 @@ export function App() {
         setRecentBackupRoots(cfg.recent_backup_roots);
       }
     } catch (err) {
-      console.error("Failed to remove recent backup folder:", err);
+      reportError("Could not remove recent backup folder", err);
     }
-  }, []);
+  }, [reportError]);
 
   const handleOpenExternalUrl = (url: string) => {
-    invoke("open_external_url", { url }).catch(() => {
-      window.open(url, "_blank", "noopener,noreferrer");
-    });
+    invoke("open_external_url", { url }).catch((err) =>
+      reportError("Could not open link", err),
+    );
   };
 
   const handleOpenFileDefault = (filePath: string) => {
     invoke("open_path_in_os", { path: filePath, revealInFolder: false }).catch(
-      (err) => console.error("Failed to open file:", err),
+      (err) => reportError("Could not open file", err),
     );
   };
 
   const handleRevealInExplorer = (filePath: string) => {
     invoke("open_path_in_os", { path: filePath, revealInFolder: true }).catch(
-      (err) => console.error("Failed to reveal file in Explorer:", err),
+      (err) => reportError("Could not show file in Explorer", err),
     );
   };
 
@@ -430,10 +465,10 @@ export function App() {
         );
         setBackups(items);
       } catch (err) {
-        console.error("Failed to refresh backups list:", err);
+        reportError("Could not refresh the backup list", err);
       }
     },
-    [backupRootPath, selectedChannelId, selectedPostId],
+    [backupRootPath, selectedChannelId, selectedPostId, reportError],
   );
 
   const handleChangeLocalAuthor = async (
@@ -450,7 +485,7 @@ export function App() {
         authorId: authorId ?? null,
       });
     } catch (err) {
-      console.error("Failed to save local author profile:", err);
+      reportError("Could not save local author profile", err);
     }
   };
 
@@ -463,9 +498,9 @@ export function App() {
       const st = await invoke<BotRuntimeStatus>("get_export_bot_status");
       setBotStatus(st);
     } catch (err) {
-      console.error("Failed to save bot token:", err);
+      reportError("Could not save bot token", err);
     }
-  }, []);
+  }, [reportError]);
 
   const handleStartExportBot = useCallback(async () => {
     if (!botToken.trim() && !botStatus.has_token_configured) {
@@ -494,21 +529,14 @@ export function App() {
       const st = await invoke<BotRuntimeStatus>("stop_export_bot");
       setBotStatus(st);
     } catch (err) {
-      console.error("Failed to stop export bot:", err);
+      reportError("Could not stop export bot", err);
     }
-  }, []);
+  }, [reportError]);
 
   const handleNewBackupArrival = useCallback(
-    (jsonPath: string, displayLabel: string) => {
-      if (!jsonPath) return;
-      if (hasUnsavedChanges && currentBackup) {
-        setPendingNewBackup({ jsonPath, displayLabel });
-      } else {
-        setPendingNewBackup(null);
-        loadSnapshot(jsonPath);
-      }
-    },
-    [hasUnsavedChanges, currentBackup, loadSnapshot],
+    (jsonPath: string, displayLabel: string) =>
+      requestSnapshotSwitch(jsonPath, displayLabel, "new-backup"),
+    [requestSnapshotSwitch],
   );
 
   // Continuously watch the active history folder while the app is running for newly added backups
@@ -597,35 +625,60 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [botStatus.state, backupRootPath, handleNewBackupArrival]);
 
-  const handleSaveAndSwitchToNewBackup = useCallback(async () => {
-    if (!pendingNewBackup) return;
-    const targetPath = pendingNewBackup.jsonPath;
-    setPendingNewBackup(null);
+  const completeSwitch = useCallback(
+    (target: PendingSwitch) => {
+      if (target.kind === "snapshot") {
+        loadSnapshot(target.jsonPath);
+      } else {
+        applyBackupRoot(target.root);
+      }
+    },
+    [loadSnapshot, applyBackupRoot],
+  );
+
+  const handleSaveAndSwitch = useCallback(async () => {
+    if (!pendingSwitch) return;
+    const target = pendingSwitch;
     if (currentBackup && hasUnsavedChanges) {
+      setIsSavingForSwitch(true);
       try {
         await invoke<BackupMutationResult>("save_backup_changes", {
           backup: currentBackup,
         });
-        const items = await invoke<BackupDescriptor[]>(
-          "list_discovered_backups",
-          {
-            customDir: backupRootPath || null,
-          },
-        );
-        setBackups(items);
       } catch (err) {
-        console.error("Failed to save edits before switching backup:", err);
+        // Stay on the current backup with the edits intact.
+        setIsSavingForSwitch(false);
+        setPendingSwitch(null);
+        reportError("Edits were not saved, staying on the current backup", err);
+        return;
+      }
+      setIsSavingForSwitch(false);
+      setHasUnsavedChanges(false);
+      if (target.kind === "snapshot") {
+        invoke<BackupDescriptor[]>("list_discovered_backups", {
+          customDir: backupRootPath || null,
+        })
+          .then(setBackups)
+          .catch((err) => reportError("Could not refresh the backup list", err));
       }
     }
-    loadSnapshot(targetPath);
-  }, [pendingNewBackup, currentBackup, hasUnsavedChanges, backupRootPath, loadSnapshot]);
+    setPendingSwitch(null);
+    completeSwitch(target);
+  }, [
+    pendingSwitch,
+    currentBackup,
+    hasUnsavedChanges,
+    backupRootPath,
+    completeSwitch,
+    reportError,
+  ]);
 
-  const handleDiscardAndSwitchToNewBackup = useCallback(() => {
-    if (!pendingNewBackup) return;
-    const targetPath = pendingNewBackup.jsonPath;
-    setPendingNewBackup(null);
-    loadSnapshot(targetPath);
-  }, [pendingNewBackup, loadSnapshot]);
+  const handleDiscardAndSwitch = useCallback(() => {
+    if (!pendingSwitch) return;
+    const target = pendingSwitch;
+    setPendingSwitch(null);
+    completeSwitch(target);
+  }, [pendingSwitch, completeSwitch]);
 
   const handleSendMessage = (
     content: string,
@@ -709,9 +762,9 @@ export function App() {
       });
       await applyMutationResult(res);
     } catch (err) {
-      console.error("Failed to save backup changes:", err);
+      reportError("Save failed, your edits are still unsaved", err);
     }
-  }, [currentBackup, hasUnsavedChanges, applyMutationResult]);
+  }, [currentBackup, hasUnsavedChanges, applyMutationResult, reportError]);
 
   const handleDiscardChanges = useCallback(() => {
     if (!selectedBackupPath) return;
@@ -729,9 +782,9 @@ export function App() {
       );
       await applyMutationResult(res);
     } catch (err) {
-      console.error("Failed to delete edited backup:", err);
+      reportError("Could not delete edited backup", err);
     }
-  }, [selectedBackupPath, applyMutationResult]);
+  }, [selectedBackupPath, applyMutationResult, reportError]);
 
   const hasEditedBackupForDate = useMemo(() => {
     if (!currentBackup) return false;
@@ -768,10 +821,16 @@ export function App() {
         hasUnsavedChanges={hasUnsavedChanges}
         hasEditedBackupForDate={hasEditedBackupForDate}
         botStatus={botStatus}
-        onSelectBackup={loadSnapshot}
+        onSelectBackup={(jsonPath) =>
+          requestSnapshotSwitch(
+            jsonPath,
+            backups.find((b) => b.json_path === jsonPath)?.display_label ?? jsonPath,
+            "snapshot",
+          )
+        }
         onSelectChannel={handleSelectChannel}
         onOpenGlobalSearch={() => setGlobalSearchOpen(true)}
-        onChangeBackupRoot={handleChangeBackupRoot}
+        onChangeBackupRoot={requestBackupRootChange}
         onBrowseBackupRoot={handleBrowseBackupRoot}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenFolderInExplorer={handleOpenFileDefault}
@@ -893,7 +952,7 @@ export function App() {
         snapshotCount={backups.length}
         onClose={() => setSettingsOpen(false)}
         onBrowseBackupRoot={handleBrowseBackupRoot}
-        onApplyBackupRoot={handleChangeBackupRoot}
+        onApplyBackupRoot={requestBackupRootChange}
         onRemoveRecentBackupRoot={handleRemoveRecentBackupRoot}
         onOpenFolderInExplorer={handleOpenFileDefault}
         onSaveAuthorProfile={(name, id) => {
@@ -902,15 +961,19 @@ export function App() {
         onSaveBotToken={handleSaveBotToken}
       />
 
-      {/* Prompt when a new backup arrives while unsaved edits are pending */}
-      <NewBackupPromptModal
-        isOpen={pendingNewBackup !== null}
-        newBackupLabel={pendingNewBackup?.displayLabel ?? ""}
+      {/* Prompt before any switch away from unsaved edits */}
+      <UnsavedEditsPromptModal
+        isOpen={pendingSwitch !== null}
+        reason={pendingSwitch?.reason ?? "snapshot"}
+        targetLabel={pendingSwitch?.label ?? ""}
         currentDateLabel={currentBackup?.date_label ?? "Current Backup"}
-        onSaveAndSwitch={handleSaveAndSwitchToNewBackup}
-        onDiscardAndSwitch={handleDiscardAndSwitchToNewBackup}
-        onStayHere={() => setPendingNewBackup(null)}
+        isSaving={isSavingForSwitch}
+        onSaveAndSwitch={handleSaveAndSwitch}
+        onDiscardAndSwitch={handleDiscardAndSwitch}
+        onStayHere={() => setPendingSwitch(null)}
       />
+
+      <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage(null)} />
     </div>
   );
 }

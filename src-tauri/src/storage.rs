@@ -22,6 +22,28 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("JSON serialization error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Cannot read existing backup, nothing was saved: {0}")]
+    Load(String),
+}
+
+/// Write `contents` to a temporary file beside `dest`, then rename it over `dest`,
+/// so readers never observe a half-written file.
+pub fn write_atomic(dest: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)?;
+    let file_name = dest
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("backup.json");
+    let tmp = parent.join(format!(".{file_name}.tmp"));
+    {
+        let mut file = fs::File::create(&tmp)?;
+        std::io::Write::write_all(&mut file, contents)?;
+        file.sync_all()?;
+    }
+    fs::rename(&tmp, dest).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
 }
 
 pub fn is_original_backup_path(path: &Path) -> bool {
@@ -402,11 +424,8 @@ pub fn save_edited_backup(
         "channels": channels_json,
     });
 
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let formatted = serde_json::to_string_pretty(&payload)?;
-    fs::write(&dest, formatted)?;
+    write_atomic(&dest, formatted.as_bytes())?;
 
     backup.source_path = dest.to_string_lossy().to_string();
     backup.is_edited = true;
@@ -526,14 +545,12 @@ pub fn save_session_backup(mut session_backup: ServerBackup) -> Result<PathBuf, 
     let edited_path = get_edited_backup_path(&orig_path);
 
     if !session_backup.is_edited && edited_path.is_file() {
-        if let (Ok(orig_backup), Ok(mut existing_edited)) = (
-            load_backup(&orig_path, true),
-            load_backup(&edited_path, true),
-        ) {
-            merge_session_changes_into_edited(&orig_backup, &session_backup, &mut existing_edited);
-            stage_pending_attachments(&mut existing_edited)?;
-            return save_edited_backup(&mut existing_edited, Some(&edited_path));
-        }
+        // Never fall back to overwriting: an unreadable edited backup would lose earlier edits.
+        let orig_backup = load_backup(&orig_path, true).map_err(StorageError::Load)?;
+        let mut existing_edited = load_backup(&edited_path, true).map_err(StorageError::Load)?;
+        merge_session_changes_into_edited(&orig_backup, &session_backup, &mut existing_edited);
+        stage_pending_attachments(&mut existing_edited)?;
+        return save_edited_backup(&mut existing_edited, Some(&edited_path));
     }
 
     stage_pending_attachments(&mut session_backup)?;

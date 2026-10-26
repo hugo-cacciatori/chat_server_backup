@@ -137,6 +137,16 @@ pub fn apply_bot_output_line(status: &mut BotRuntimeStatus, raw_line: &str) {
         }
         status.status_text = "Export complete! Ready for !export".to_string();
         status.last_error = None;
+    } else if let Some(reason) = line.strip_prefix("[EXPORT_FAILED]") {
+        let reason = reason.trim();
+        let msg = if reason.is_empty() {
+            "Export failed".to_string()
+        } else {
+            format!("Export failed: {reason}")
+        };
+        status.state = "error".to_string();
+        status.last_error = Some(msg.clone());
+        status.status_text = msg;
     } else if line.starts_with("Error:")
         || line.contains("Improper token")
         || line.contains("LoginFailure")
@@ -202,11 +212,8 @@ pub fn load_app_settings_from(path: &Path) -> AppSettings {
 }
 
 pub fn save_app_settings_to(settings: &AppSettings, path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
     let text = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    fs::write(path, text).map_err(|e| e.to_string())
+    storage::write_atomic(path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
 pub fn default_history_dir() -> PathBuf {
@@ -552,31 +559,26 @@ fn open_path_in_os(path: String, reveal_in_folder: bool) -> Result<(), String> {
     if !target.exists() {
         return Err(format!("Path does not exist: {path}"));
     }
+    // The OS shell API receives the path verbatim; no command interpreter parses it.
     if reveal_in_folder {
-        Command::new("explorer.exe")
-            .arg(format!("/select,{}", target.to_string_lossy()))
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        tauri_plugin_opener::reveal_item_in_dir(target).map_err(|e| e.to_string())
     } else {
-        Command::new("cmd")
-            .args(["/C", "start", "", &target.to_string_lossy()])
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        tauri_plugin_opener::open_path(target, None::<&str>).map_err(|e| e.to_string())
     }
-    Ok(())
 }
 
-#[tauri::command]
-fn open_external_url(url: String) -> Result<(), String> {
+pub fn validate_external_url(url: &str) -> Result<&str, String> {
     let trimmed = url.trim();
     if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
         return Err("Only http:// and https:// URLs are allowed.".to_string());
     }
-    Command::new("cmd")
-        .args(["/C", "start", "", trimmed])
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(trimmed)
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    let checked = validate_external_url(&url)?;
+    tauri_plugin_opener::open_url(checked, None::<&str>).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -615,7 +617,8 @@ mod tests {
     use crate::loader::{parse_embed, resolve_attachment};
     use crate::model::Author;
     use crate::storage::{
-        add_message, create_post, delete_message, edit_message, save_edited_backup, StorageError,
+        add_message, create_post, delete_message, edit_message, save_edited_backup,
+        save_session_backup, StorageError,
     };
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -1107,6 +1110,51 @@ mod tests {
         apply_bot_output_line(&mut status, "Error: Improper token has been passed.");
         assert_eq!(status.state, "error");
         assert!(status.last_error.is_some());
+
+        apply_bot_output_line(&mut status, "[EXPORT_FAILED] Missing Access");
+        assert_eq!(status.state, "error");
+        assert_eq!(status.status_text, "Export failed: Missing Access");
+    }
+
+    #[test]
+    fn test_external_url_validation_passes_query_strings_verbatim() {
+        assert_eq!(
+            validate_external_url(" https://example.org/watch?v=x&t=10 ").unwrap(),
+            "https://example.org/watch?v=x&t=10"
+        );
+        assert!(validate_external_url("file:///C:/Windows/System32/calc.exe").is_err());
+        assert!(validate_external_url("javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn test_atomic_write_replaces_file_and_leaves_no_temp() {
+        let tmp = TempDir::new().unwrap();
+        let target = tmp.path().join("server_export_2026-10-20_edited.json");
+        storage::write_atomic(&target, b"{\"v\":1}").unwrap();
+        storage::write_atomic(&target, b"{\"v\":2}").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "{\"v\":2}");
+        let leftovers: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn test_save_from_original_refuses_to_overwrite_unreadable_edited_backup() {
+        let tmp = TempDir::new().unwrap();
+        let history_dir = create_sample_history(tmp.path());
+        let date_dir = history_dir.join("2026-10-20");
+        let orig_json = date_dir.join("server_export_2026-10-20.json");
+        let edited_json = date_dir.join("server_export_2026-10-20_edited.json");
+        fs::write(&edited_json, "{ corrupt").unwrap();
+
+        let mut session = load_backup(&orig_json, true).unwrap();
+        session.channels[0].posts[0].messages[0].content = "changed".to_string();
+        let err = save_session_backup(session).unwrap_err();
+        assert!(matches!(err, StorageError::Load(_)));
+        assert_eq!(fs::read_to_string(&edited_json).unwrap(), "{ corrupt");
     }
 
     #[test]
@@ -1153,6 +1201,13 @@ mod tests {
         assert!(code.contains("oldest_first=True"));
         assert!(code.contains("[e.to_dict() for e in message.embeds]"));
         assert!(!code.contains("str(e.to_dict())"));
+
+        // Robust exports: private archives, permission gate, failure reporting, atomic writes
+        assert!(code.contains("private=True"));
+        assert!(code.contains("has_guild_permissions(manage_guild=True)"));
+        assert!(code.contains("[EXPORT_FAILED]"));
+        assert!(code.contains("os.replace(tmp_path, path)"));
+        assert!(code.contains(".Forbidden:"));
     }
 
     #[test]

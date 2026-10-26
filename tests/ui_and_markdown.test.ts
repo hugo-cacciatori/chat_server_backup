@@ -8,7 +8,8 @@ import { searchAcrossBackup } from "../src/components/GlobalSearchModal";
 import { cleanDisplayFilename } from "../src/components/MessageCard";
 import { SidebarChannels } from "../src/components/SidebarChannels";
 import { SettingsModal } from "../src/components/SettingsModal";
-import { NewBackupPromptModal } from "../src/components/NewBackupPromptModal";
+import { UnsavedEditsPromptModal } from "../src/components/UnsavedEditsPromptModal";
+import { ErrorBanner } from "../src/components/ErrorBanner";
 import {
   formatByteSize,
   formatDurationSeconds,
@@ -342,9 +343,10 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
     expect(modalHtml).toContain("Local Author Profile");
 
     const promptHtml = renderToStaticMarkup(
-      createElement(NewBackupPromptModal, {
+      createElement(UnsavedEditsPromptModal, {
         isOpen: true,
-        newBackupLabel: "2026-10-24 (Original)",
+        reason: "new-backup",
+        targetLabel: "2026-10-24 (Original)",
         currentDateLabel: "2026-10-20",
         onSaveAndSwitch: () => {},
         onDiscardAndSwitch: () => {},
@@ -357,5 +359,32 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
     expect(promptHtml).toContain("2026-10-20 (Edited)");
     expect(promptHtml).toContain("Discard Edits &amp; Switch");
     expect(promptHtml).toContain("Stay Here");
+
+    const snapshotPromptHtml = renderToStaticMarkup(
+      createElement(UnsavedEditsPromptModal, {
+        isOpen: true,
+        reason: "snapshot",
+        targetLabel: "2026-10-18 (Original)",
+        currentDateLabel: "2026-10-20",
+        isSaving: true,
+        onSaveAndSwitch: () => {},
+        onDiscardAndSwitch: () => {},
+        onStayHere: () => {},
+      }),
+    );
+    expect(snapshotPromptHtml).toContain("Switch Snapshot?");
+    expect(snapshotPromptHtml).toContain("Saving…");
+
+    const bannerHtml = renderToStaticMarkup(
+      createElement(ErrorBanner, {
+        message: "Save failed, your edits are still unsaved: disk full",
+        onDismiss: () => {},
+      }),
+    );
+    expect(bannerHtml).toContain('role="alert"');
+    expect(bannerHtml).toContain("disk full");
+    expect(
+      renderToStaticMarkup(createElement(ErrorBanner, { message: null, onDismiss: () => {} })),
+    ).toBe("");
   });
 });
