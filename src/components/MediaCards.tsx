@@ -153,6 +153,7 @@ export function AudioAttachmentCard({
         <div className="flex flex-1 flex-col gap-1">
           <input
             type="range"
+            aria-label="Seek"
             min={0}
             max={duration > 0 ? duration : 100}
             step={0.1}
@@ -195,6 +196,7 @@ export function AudioAttachmentCard({
           </button>
           <input
             type="range"
+            aria-label="Volume"
             min={0}
             max={1}
             step={0.05}

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FolderOpen, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 interface LightboxModalProps {
   src: string | null;
@@ -16,6 +17,8 @@ export function LightboxModal({
   onClose,
   onRevealInExplorer,
 }: LightboxModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocus(dialogRef, Boolean(src));
   const [zoom, setZoom] = useState(1);
 
   useEffect(() => {
@@ -38,6 +41,8 @@ export function LightboxModal({
 
   return (
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       onClick={onClose}

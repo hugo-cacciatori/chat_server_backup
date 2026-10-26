@@ -28,6 +28,20 @@ interface DocumentAttachmentCardProps {
   onRevealInExplorer?: (filePath: string) => void;
 }
 
+// Attachment files never change in place, so one inspection per path serves every remount
+// of a virtualized message card.
+const inspectionCache = new Map<string, Promise<AttachmentInspection>>();
+
+function inspectAttachmentCached(path: string): Promise<AttachmentInspection> {
+  let pending = inspectionCache.get(path);
+  if (!pending) {
+    pending = invoke<AttachmentInspection>("inspect_attachment", { path });
+    pending.catch(() => inspectionCache.delete(path));
+    inspectionCache.set(path, pending);
+  }
+  return pending;
+}
+
 const COLLAPSED_CODE_LINES = 20;
 const COLLAPSED_DOCX_PARAGRAPHS = 6;
 const COLLAPSED_ARCHIVE_ENTRIES = 12;
@@ -50,9 +64,7 @@ export function DocumentAttachmentCard({
   useEffect(() => {
     if (!att.exists || !att.resolved_path) return;
     let cancelled = false;
-    invoke<AttachmentInspection>("inspect_attachment", {
-      path: att.resolved_path,
-    })
+    inspectAttachmentCached(att.resolved_path)
       .then((info) => {
         if (!cancelled) {
           setInspection(info);
@@ -230,7 +242,7 @@ export function DocumentAttachmentCard({
 
     return (
       <div className="mt-2 max-w-2xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900/80 shadow-sm">
-        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3.5 py-2.5 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3.5 py-2.5 text-xs">
           <div className="flex min-w-0 items-center gap-2">
             <FileText className="h-4 w-4 shrink-0 text-sky-400" />
             <span className="truncate font-semibold text-slate-100" title={att.filename}>
@@ -309,7 +321,7 @@ export function DocumentAttachmentCard({
 
     return (
       <div className="mt-2 max-w-2xl overflow-hidden rounded-xl border border-slate-800 bg-slate-900/80 shadow-sm">
-        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3.5 py-2.5 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 px-3.5 py-2.5 text-xs">
           <div className="flex min-w-0 items-center gap-2">
             <FileArchive className="h-4 w-4 shrink-0 text-amber-400" />
             <span className="truncate font-semibold text-slate-100" title={att.filename}>
@@ -413,7 +425,7 @@ export function DocumentAttachmentCard({
               <div className="truncate font-semibold text-slate-100" title={att.filename}>
                 {displayName}
               </div>
-              <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-400">
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 whitespace-nowrap text-[11px] text-slate-400">
                 <span className="font-mono uppercase text-rose-300">PDF</span>
                 {inspection?.file_size !== undefined && (
                   <>
@@ -484,7 +496,7 @@ export function DocumentAttachmentCard({
 
   // 5. Fallback Generic File Card
   return (
-    <div className="mt-2 flex max-w-lg items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/75 px-3.5 py-2.5 text-xs shadow-sm">
+    <div className="mt-2 flex max-w-lg flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/75 px-3.5 py-2.5 text-xs shadow-sm">
       <div className="flex min-w-0 items-center gap-2.5">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300 ring-1 ring-indigo-500/30">
           <FileSpreadsheet className="h-4 w-4" />
@@ -493,7 +505,7 @@ export function DocumentAttachmentCard({
           <div className="truncate font-medium text-slate-100" title={att.filename}>
             {displayName}
           </div>
-          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-400">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 whitespace-nowrap text-[11px] text-slate-400">
             <span className="font-mono uppercase">{ext || "file"}</span>
             {inspection?.file_size !== undefined && (
               <>

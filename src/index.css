@@ -1,1 +1,7 @@
 @import "tailwindcss";
+
+/* Keyboard focus is always visible (SPEC §2.2.1); inputs keep their own focus border via focus:outline-none. */
+:focus-visible {
+  outline: 2px solid var(--color-indigo-400);
+  outline-offset: 2px;
+}

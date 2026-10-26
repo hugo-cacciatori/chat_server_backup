@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ArchiveRestore, RotateCcw, Save, X } from "lucide-react";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 export type SwitchReason = "new-backup" | "snapshot" | "folder";
 
@@ -30,6 +31,8 @@ export function UnsavedEditsPromptModal({
   onDiscardAndSwitch,
   onStayHere,
 }: UnsavedEditsPromptModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocus(dialogRef, isOpen);
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -50,6 +53,8 @@ export function UnsavedEditsPromptModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label={title}

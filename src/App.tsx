@@ -30,6 +30,8 @@ import {
   type SwitchReason,
 } from "./components/UnsavedEditsPromptModal";
 import { ErrorBanner } from "./components/ErrorBanner";
+import { ConfirmDialog } from "./components/ConfirmDialog";
+import { keepIfUnchanged } from "./lib/state";
 import { PdfReaderModal } from "./components/PdfReaderModal";
 import { SettingsModal } from "./components/SettingsModal";
 
@@ -208,7 +210,7 @@ export function App() {
           items.filter((b) => !b.is_edited).map((b) => b.json_path.toLowerCase()),
         );
         hasInitializedDiscoveryRef.current = true;
-        setBackups(items);
+        setBackups((prev) => keepIfUnchanged(prev, items));
         if (items.length > 0) {
           loadSnapshot(items[0].json_path);
         }
@@ -342,7 +344,7 @@ export function App() {
               .map((b) => b.json_path.toLowerCase()),
           );
           hasInitializedDiscoveryRef.current = true;
-          setBackups(items);
+          setBackups((prev) => keepIfUnchanged(prev, items));
           if (items.length > 0) {
             loadSnapshot(items[0].json_path);
           } else {
@@ -463,7 +465,7 @@ export function App() {
             customDir: backupRootPath || null,
           },
         );
-        setBackups(items);
+        setBackups((prev) => keepIfUnchanged(prev, items));
       } catch (err) {
         reportError("Could not refresh the backup list", err);
       }
@@ -547,7 +549,7 @@ export function App() {
         customDir: backupRootPath || null,
       })
         .then((items) => {
-          setBackups(items);
+          setBackups((prev) => keepIfUnchanged(prev, items));
           const originals = items.filter((b) => !b.is_edited);
           const newlyAdded = originals.find(
             (b) => !knownOriginalPathsRef.current.has(b.json_path.toLowerCase()),
@@ -584,14 +586,14 @@ export function App() {
     const timer = window.setInterval(() => {
       invoke<BotRuntimeStatus>("get_export_bot_status")
         .then((st) => {
-          setBotStatus(st);
+          setBotStatus((prev) => keepIfUnchanged(prev, st));
           if (st.completed_exports > lastCompletedExportsRef.current) {
             lastCompletedExportsRef.current = st.completed_exports;
             invoke<BackupDescriptor[]>("list_discovered_backups", {
               customDir: backupRootPath || null,
             })
               .then((items) => {
-                setBackups(items);
+                setBackups((prev) => keepIfUnchanged(prev, items));
                 for (const orig of items.filter((b) => !b.is_edited)) {
                   knownOriginalPathsRef.current.add(
                     orig.json_path.toLowerCase(),
@@ -658,7 +660,7 @@ export function App() {
         invoke<BackupDescriptor[]>("list_discovered_backups", {
           customDir: backupRootPath || null,
         })
-          .then(setBackups)
+          .then((items) => setBackups((prev) => keepIfUnchanged(prev, items)))
           .catch((err) => reportError("Could not refresh the backup list", err));
       }
     }
@@ -786,15 +788,17 @@ export function App() {
     }
   }, [selectedBackupPath, applyMutationResult, reportError]);
 
-  const hasEditedBackupForDate = useMemo(() => {
-    if (!currentBackup) return false;
-    return (
-      currentBackup.is_edited ||
-      backups.some(
-        (b) => b.date_label === currentBackup.date_label && b.is_edited,
-      )
-    );
-  }, [currentBackup, backups]);
+  // Destructive actions wait for confirmation (SPEC §2.2.1).
+  const [pendingConfirm, setPendingConfirm] = useState<"delete-edited" | "discard" | null>(
+    null,
+  );
+  const cancelConfirm = useCallback(() => setPendingConfirm(null), []);
+  const confirmPendingAction = useCallback(() => {
+    const action = pendingConfirm;
+    setPendingConfirm(null);
+    if (action === "delete-edited") void handleDeleteEditedBackup();
+    else if (action === "discard") handleDiscardChanges();
+  }, [pendingConfirm, handleDeleteEditedBackup, handleDiscardChanges]);
 
   // Global keyboard shortcut: Ctrl+S (Save Changes)
   useEffect(() => {
@@ -819,7 +823,7 @@ export function App() {
         backupRootPath={backupRootPath}
         localAuthorName={localAuthorName}
         hasUnsavedChanges={hasUnsavedChanges}
-        hasEditedBackupForDate={hasEditedBackupForDate}
+        canDeleteEditedBackup={Boolean(currentBackup?.is_edited)}
         botStatus={botStatus}
         onSelectBackup={(jsonPath) =>
           requestSnapshotSwitch(
@@ -837,8 +841,8 @@ export function App() {
         onStartExportBot={handleStartExportBot}
         onStopExportBot={handleStopExportBot}
         onSaveChanges={handleSaveChanges}
-        onDiscardChanges={handleDiscardChanges}
-        onDeleteEditedBackup={handleDeleteEditedBackup}
+        onDiscardChanges={() => setPendingConfirm("discard")}
+        onDeleteEditedBackup={() => setPendingConfirm("delete-edited")}
         onChangeLocalAuthor={handleChangeLocalAuthor}
       />
 
@@ -972,6 +976,46 @@ export function App() {
         onDiscardAndSwitch={handleDiscardAndSwitch}
         onStayHere={() => setPendingSwitch(null)}
       />
+
+      <ConfirmDialog
+        isOpen={pendingConfirm === "delete-edited"}
+        title="Delete Edited Backup?"
+        confirmLabel="Delete Edited Backup"
+        onConfirm={confirmPendingAction}
+        onCancel={cancelConfirm}
+      >
+        <p>
+          This permanently removes{" "}
+          <code className="font-mono text-rose-200">
+            server_export_{currentBackup?.date_label}_edited.json
+          </code>{" "}
+          and the{" "}
+          <code className="font-mono text-rose-200">
+            assets_{currentBackup?.date_label}_edited/
+          </code>{" "}
+          folder, then returns to the Original backup.
+        </p>
+        <p className="text-slate-400">
+          {hasUnsavedChanges ? "Your unsaved edits are lost too. " : ""}The Original backup is
+          never touched. This cannot be undone.
+        </p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        isOpen={pendingConfirm === "discard"}
+        title="Discard Unsaved Edits?"
+        confirmLabel="Discard Edits"
+        onConfirm={confirmPendingAction}
+        onCancel={cancelConfirm}
+      >
+        <p>
+          Your unsaved edits to{" "}
+          <span className="font-semibold text-white">
+            {currentBackup?.date_label} ({currentBackup?.is_edited ? "Edited" : "Original"})
+          </span>{" "}
+          are dropped and the backup reloads from disk.
+        </p>
+      </ConfirmDialog>
 
       <ErrorBanner message={errorMessage} onDismiss={() => setErrorMessage(null)} />
     </div>

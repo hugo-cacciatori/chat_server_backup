@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { ExternalLink, FileText, FolderOpen, X } from "lucide-react";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 interface PdfReaderModalProps {
   src: string | null;
@@ -18,6 +19,8 @@ export function PdfReaderModal({
   onOpenFileDefault,
   onRevealInExplorer,
 }: PdfReaderModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocus(dialogRef, Boolean(src));
   useEffect(() => {
     if (!src) return;
     const handleKey = (e: KeyboardEvent) => {
@@ -31,6 +34,8 @@ export function PdfReaderModal({
 
   return (
     <div
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       onClick={onClose}

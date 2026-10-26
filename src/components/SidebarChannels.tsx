@@ -34,7 +34,7 @@ interface SidebarChannelsProps {
   backupRootPath: string;
   localAuthorName: string;
   hasUnsavedChanges: boolean;
-  hasEditedBackupForDate: boolean;
+  canDeleteEditedBackup: boolean;
   botStatus?: BotRuntimeStatus;
   onSelectBackup: (jsonPath: string) => void;
   onSelectChannel: (channelId: string) => void;
@@ -59,7 +59,7 @@ export function SidebarChannels({
   backupRootPath,
   localAuthorName,
   hasUnsavedChanges,
-  hasEditedBackupForDate,
+  canDeleteEditedBackup,
   botStatus,
   onSelectBackup,
   onSelectChannel,
@@ -131,7 +131,7 @@ export function SidebarChannels({
   };
 
   return (
-    <aside className="flex h-full w-64 shrink-0 flex-col border-r border-slate-800/90 bg-slate-950 select-none">
+    <aside className="flex h-full w-56 xl:w-64 shrink-0 flex-col border-r border-slate-800/90 bg-slate-950 select-none">
       {/* Server Header */}
       <div className="border-b border-slate-800/90 p-3.5">
         <div className="flex items-center justify-between gap-2">
@@ -210,7 +210,7 @@ export function SidebarChannels({
               </div>
             )}
 
-            {hasEditedBackupForDate && onDeleteEditedBackup && (
+            {canDeleteEditedBackup && onDeleteEditedBackup && (
               <button
                 type="button"
                 onClick={() => onDeleteEditedBackup()}
@@ -282,7 +282,7 @@ export function SidebarChannels({
 
           return (
             <div className="mt-2.5 rounded-lg border border-slate-800/90 bg-slate-900/50 p-2">
-              <div className="flex items-center justify-between gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
                 <div className="flex min-w-0 items-center gap-1.5">
                   <Bot className="h-3.5 w-3.5 shrink-0 text-indigo-400" />
                   <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-300">

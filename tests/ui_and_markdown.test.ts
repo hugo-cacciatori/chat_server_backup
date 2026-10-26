@@ -4,8 +4,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { parseMarkdownBlocks, tokenizeCodeLine } from "../src/lib/markdown";
 import { parseInternalChannelUrl, resolveTargetInBackup } from "../src/lib/links";
 import { filterAndSortPosts } from "../src/components/PostListPane";
-import { searchAcrossBackup } from "../src/components/GlobalSearchModal";
-import { cleanDisplayFilename } from "../src/components/MessageCard";
+import { moveActiveIndex, searchAcrossBackup } from "../src/components/GlobalSearchModal";
+import { cleanDisplayFilename, MessageCard } from "../src/components/MessageCard";
+import { ConfirmDialog } from "../src/components/ConfirmDialog";
+import { keepIfUnchanged } from "../src/lib/state";
 import { SidebarChannels } from "../src/components/SidebarChannels";
 import { SettingsModal } from "../src/components/SettingsModal";
 import { UnsavedEditsPromptModal } from "../src/components/UnsavedEditsPromptModal";
@@ -283,7 +285,7 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
         backupRootPath: "F:\\server_backup\\history",
         localAuthorName: "Hugo",
         hasUnsavedChanges: false,
-        hasEditedBackupForDate: false,
+        canDeleteEditedBackup: false,
         botStatus: {
           state: "connected",
           status_text: "Connected as ArchiveBot#4821 — ready for !export",
@@ -386,5 +388,82 @@ describe("Backup Folder Controls & Settings Modal UI", () => {
     expect(
       renderToStaticMarkup(createElement(ErrorBanner, { message: null, onDismiss: () => {} })),
     ).toBe("");
+  });
+});
+
+describe("UI/UX: performance, confirmations, keyboard access", () => {
+  it("keeps the previous value when a poll returns unchanged data", () => {
+    const prev = [{ json_path: "a.json", is_edited: false }];
+    const same = [{ json_path: "a.json", is_edited: false }];
+    const changed = [{ json_path: "b.json", is_edited: false }];
+    expect(keepIfUnchanged(prev, same)).toBe(prev);
+    expect(keepIfUnchanged(prev, changed)).toBe(changed);
+  });
+
+  it("moves the global search highlight within the result list", () => {
+    expect(moveActiveIndex(0, 1, 3)).toBe(1);
+    expect(moveActiveIndex(2, 1, 3)).toBe(2);
+    expect(moveActiveIndex(0, -1, 3)).toBe(0);
+    expect(moveActiveIndex(0, 1, 0)).toBe(-1);
+  });
+
+  it("renders a destructive confirmation as an alert dialog with Cancel first", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        ConfirmDialog,
+        {
+          isOpen: true,
+          title: "Delete Edited Backup?",
+          confirmLabel: "Delete Edited Backup",
+          onConfirm: () => {},
+          onCancel: () => {},
+          children: createElement("p", null, "server_export_2026-10-20_edited.json"),
+        },
+      ),
+    );
+    expect(html).toContain('role="alertdialog"');
+    expect(html).toContain("server_export_2026-10-20_edited.json");
+    expect(html.indexOf(">Cancel<")).toBeLessThan(html.indexOf(">Delete Edited Backup<"));
+    expect(
+      renderToStaticMarkup(
+        createElement(ConfirmDialog, {
+          isOpen: false,
+          title: "x",
+          confirmLabel: "x",
+          onConfirm: () => {},
+          onCancel: () => {},
+          children: null,
+        }),
+      ),
+    ).toBe("");
+  });
+
+  it("keeps message actions and images reachable from the keyboard", () => {
+    const msg = sampleBackup.channels[0].posts[0].messages[0];
+    const html = renderToStaticMarkup(
+      createElement(MessageCard, {
+        message: {
+          ...msg,
+          attachments: [
+            {
+              relative_path: "assets_2026-10-20/1_diagram.png",
+              filename: "1_diagram.png",
+              resolved_path: "C:/history/2026-10-20/assets_2026-10-20/1_diagram.png",
+              extension: "png",
+              exists: true,
+            },
+          ],
+        },
+        backup: sampleBackup,
+        channelId: sampleBackup.channels[0].id,
+        postId: sampleBackup.channels[0].posts[0].id,
+        onEditMessage: () => {},
+        onDeleteMessage: () => {},
+      }),
+    );
+    expect(html).toContain('role="toolbar"');
+    expect(html).toContain("focus-within:opacity-100");
+    expect(html).not.toContain("invisible");
+    expect(html).toContain('aria-label="Open image diagram.png"');
   });
 });

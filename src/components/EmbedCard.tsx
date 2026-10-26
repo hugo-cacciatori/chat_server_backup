@@ -104,24 +104,36 @@ export function EmbedCard({
         </div>
 
         {embed.thumbnail_url && (
-          <img
-            src={embed.thumbnail_url}
-            alt={embed.title || "Embed thumbnail"}
+          <button
+            type="button"
             onClick={() =>
               onOpenImageLightbox?.(embed.thumbnail_url, embed.title || "Thumbnail")
             }
-            className="h-16 w-16 shrink-0 rounded-md object-cover bg-slate-950 cursor-zoom-in border border-slate-800"
-          />
+            aria-label={`Open image ${embed.title || "thumbnail"}`}
+            className="shrink-0 cursor-zoom-in"
+          >
+            <img
+              src={embed.thumbnail_url}
+              alt={embed.title || "Embed thumbnail"}
+              className="h-16 w-16 rounded-md object-cover bg-slate-950 border border-slate-800"
+            />
+          </button>
         )}
       </div>
 
       {embed.image_url && (
-        <img
-          src={embed.image_url}
-          alt={embed.title || "Embed image"}
+        <button
+          type="button"
           onClick={() => onOpenImageLightbox?.(embed.image_url, embed.title || "Image")}
-          className="mt-3 max-h-72 max-w-full rounded-md object-contain bg-slate-950 cursor-zoom-in border border-slate-800"
-        />
+          aria-label={`Open image ${embed.title || "from embed"}`}
+          className="mt-3 block cursor-zoom-in"
+        >
+          <img
+            src={embed.image_url}
+            alt={embed.title || "Embed image"}
+            className="max-h-72 max-w-full rounded-md object-contain bg-slate-950 border border-slate-800"
+          />
+        </button>
       )}
 
       {embed.footer_text && (

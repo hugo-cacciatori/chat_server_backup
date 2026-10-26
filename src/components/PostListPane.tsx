@@ -223,7 +223,7 @@ export function PostListPane({
 
   if (!channel) {
     return (
-      <aside className="flex h-full w-80 shrink-0 flex-col items-center justify-center border-r border-slate-800/90 bg-slate-900/50 p-6 text-center text-xs text-slate-500">
+      <aside className="flex h-full w-64 xl:w-80 shrink-0 flex-col items-center justify-center border-r border-slate-800/90 bg-slate-900/50 p-6 text-center text-xs text-slate-500">
         Select a channel on the left.
       </aside>
     );
@@ -233,7 +233,7 @@ export function PostListPane({
   const HeaderIcon = isForum ? LayoutList : Hash;
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-r border-slate-800/90 bg-slate-900/40 select-none">
+    <aside className="flex h-full w-64 xl:w-80 shrink-0 flex-col border-r border-slate-800/90 bg-slate-900/40 select-none">
       {/* Channel Header */}
       <div className="border-b border-slate-800/90 p-3.5">
         <div className="flex items-center justify-between gap-2">
@@ -273,6 +273,7 @@ export function PostListPane({
               </span>
               <button
                 type="button"
+                aria-label="Close new post form"
                 onClick={() => setCreatingPost(false)}
                 className="text-slate-400 hover:text-white cursor-pointer"
               >
@@ -347,6 +348,7 @@ export function PostListPane({
                     <span className="max-w-[180px] truncate">{p}</span>
                     <button
                       type="button"
+                      aria-label="Remove attachment"
                       onClick={() =>
                         setNewPostAttPaths((prev) => prev.filter((x) => x !== p))
                       }
@@ -450,6 +452,7 @@ export function PostListPane({
                     key={tag.id}
                     type="button"
                     onClick={() => onToggleTag(tag.id)}
+                    aria-pressed={isActive}
                     className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-all cursor-pointer ${
                       isActive
                         ? "bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400"

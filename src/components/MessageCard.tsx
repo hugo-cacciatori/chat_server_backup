@@ -120,6 +120,7 @@ function AttachmentItem({
             {att.resolved_path && onRevealInExplorer && (
               <button
                 type="button"
+                aria-label="Show in Explorer"
                 onClick={() => onRevealInExplorer(att.resolved_path!)}
                 title="Show in Explorer"
                 className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100 cursor-pointer"
@@ -129,12 +130,18 @@ function AttachmentItem({
             )}
           </div>
         </div>
-        <img
-          src={assetUrl}
-          alt={displayName}
+        <button
+          type="button"
           onClick={() => onOpenImageLightbox?.(assetUrl, displayName, att.resolved_path)}
-          className="max-h-72 max-w-full cursor-zoom-in bg-slate-950 object-contain"
-        />
+          aria-label={`Open image ${displayName}`}
+          className="block cursor-zoom-in"
+        >
+          <img
+            src={assetUrl}
+            alt={displayName}
+            className="max-h-72 max-w-full bg-slate-950 object-contain"
+          />
+        </button>
       </div>
     );
   }
@@ -252,7 +259,12 @@ export function MessageCard({
       }`}
     >
       {/* Hover Action Toolbar */}
-      <div className="invisible group-hover:visible absolute -top-2.5 right-4 z-10 flex items-center gap-0.5 rounded-lg border border-slate-700/80 bg-slate-900 px-1.5 py-1 shadow-lg">
+      {/* Shown on hover or keyboard focus; opacity (not visibility) keeps the buttons reachable with Tab */}
+      <div
+        role="toolbar"
+        aria-label={`Actions for message from ${authorName}`}
+        className="pointer-events-none absolute -top-2.5 right-4 z-10 flex items-center gap-0.5 rounded-lg border border-slate-700/80 bg-slate-900 px-1.5 py-1 opacity-0 shadow-lg group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+      >
         <button
           type="button"
           onClick={handleCopyText}
@@ -458,6 +470,7 @@ export function MessageCard({
                         <span className="truncate max-w-xs">{p}</span>
                         <button
                           type="button"
+                          aria-label="Remove attachment"
                           onClick={() =>
                             setEditAttPaths((prev) => prev.filter((x) => x !== p))
                           }

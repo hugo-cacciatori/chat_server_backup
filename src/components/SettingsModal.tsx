@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Check,
   ExternalLink,
@@ -14,6 +14,7 @@ import {
   UserCircle2,
   X,
 } from "lucide-react";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -48,6 +49,8 @@ export function SettingsModal({
   onSaveAuthorProfile,
   onSaveBotToken,
 }: SettingsModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useDialogFocus(dialogRef, isOpen);
   const [folderInput, setFolderInput] = useState(backupRootPath);
   const [authorNameInput, setAuthorNameInput] = useState(localAuthorName);
   const [authorIdInput, setAuthorIdInput] = useState(localAuthorId);
@@ -110,6 +113,8 @@ export function SettingsModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm"
+      ref={dialogRef}
+      tabIndex={-1}
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
