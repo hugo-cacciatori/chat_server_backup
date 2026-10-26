@@ -1,6 +1,7 @@
 pub mod loader;
 pub mod model;
 pub mod previews;
+pub mod selftest;
 pub mod storage;
 
 use std::env;
@@ -195,11 +196,24 @@ pub fn push_recent_backup_root(cfg: &mut AppSettings, new_root: &str) {
     }
 }
 
-pub fn settings_file_path() -> PathBuf {
-    let base = env::var("LOCALAPPDATA")
+pub fn exe_dir() -> PathBuf {
+    env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+pub fn local_app_data_dir() -> Option<PathBuf> {
+    env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
-    base.join("ChatServerBackup").join("settings.json")
+}
+
+pub fn settings_file_path() -> PathBuf {
+    local_app_data_dir()
+        .unwrap_or_else(exe_dir)
+        .join("ChatServerBackup")
+        .join("settings.json")
 }
 
 pub fn load_app_settings_from(path: &Path) -> AppSettings {
@@ -216,28 +230,46 @@ pub fn save_app_settings_to(settings: &AppSettings, path: &Path) -> Result<(), S
     storage::write_atomic(path, text.as_bytes()).map_err(|e| e.to_string())
 }
 
+/// `history/` beside the executable; debug builds fall back to the repository's `history/`.
 pub fn default_history_dir() -> PathBuf {
-    if let Ok(exe) = env::current_exe() {
-        let mut cur = exe.parent();
-        while let Some(dir) = cur {
-            let direct = dir.join("history");
-            if direct.is_dir() {
-                return direct;
-            }
-            cur = dir.parent();
+    let beside_exe = exe_dir().join("history");
+    if cfg!(debug_assertions) && !beside_exe.is_dir() {
+        let repo_history = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|repo| repo.join("history"));
+        if let Some(dir) = repo_history.filter(|d| d.is_dir()) {
+            return dir;
         }
     }
-    if let Ok(cwd) = env::current_dir() {
-        let mut cur = Some(cwd.as_path());
-        while let Some(dir) = cur {
-            let direct = dir.join("history");
-            if direct.is_dir() {
-                return direct;
-            }
-            cur = dir.parent();
-        }
-    }
-    PathBuf::from("history")
+    beside_exe
+}
+
+fn app_context() -> tauri::Context<tauri::Wry> {
+    tauri::generate_context!()
+}
+
+/// Run the standalone checks of `--self-test` (SPEC §6.4) without creating a window or files.
+pub fn run_self_test() -> Vec<selftest::CheckResult> {
+    let context = app_context();
+    let assets = context.assets();
+    let mut results = vec![selftest::CheckResult::new(
+        "release build",
+        !tauri::is_dev(),
+        "UI is embedded, not served by a dev server",
+    )];
+    results.extend(selftest::check_embedded_ui(|path| {
+        assets
+            .get(&tauri::utils::assets::AssetKey::from(path))
+            .map(|bytes| bytes.into_owned())
+    }));
+    results.extend(selftest::check_default_paths(
+        &exe_dir(),
+        &default_history_dir(),
+        &settings_file_path(),
+        local_app_data_dir().as_deref(),
+    ));
+    results.push(selftest::check_bot_script(EMBEDDED_EXPORT_BOT_PY));
+    results
 }
 
 #[tauri::command]
@@ -602,7 +634,7 @@ pub fn run() {
             open_path_in_os,
             open_external_url
         ])
-        .build(tauri::generate_context!())
+        .build(app_context())
         .expect("error while building ChatServerBackup application")
         .run(|_app_handle, event| {
             if let tauri::RunEvent::Exit = event {

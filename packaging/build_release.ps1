@@ -26,12 +26,9 @@ if (-not (Test-Path $BuiltExe)) {
     throw "Expected compiled executable not found at $BuiltExe"
 }
 
-# Verify that the production frontend assets are embedded in the binary (and not devUrl localhost:1420)
-$ExeBytes = [System.IO.File]::ReadAllBytes($BuiltExe)
-$ExeAscii = [System.Text.Encoding]::ASCII.GetString($ExeBytes)
-if (-not $ExeAscii.Contains("/assets/index-")) {
-    throw "Release binary verification failed: compiled frontend assets (/assets/index-*) were not embedded in $BuiltExe"
-}
+# Standalone gate: embedded UI assets and default paths, checked from a folder outside the repository
+Write-Output "Running standalone self-test..."
+& "$PSScriptRoot\self_test.ps1" -Exe $BuiltExe
 
 $ReleaseDir = "$Root\dist\v$Version"
 $AppDir = "$ReleaseDir\ChatServerBackup"

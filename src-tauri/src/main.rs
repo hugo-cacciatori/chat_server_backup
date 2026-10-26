@@ -13,6 +13,23 @@ fn main() {
         return;
     }
 
+    // No window, no files written; the report goes to (redirected) stdout and the exit code.
+    if args.iter().any(|a| a == "--self-test") {
+        println!("ChatServerBackup {} self-test", env!("CARGO_PKG_VERSION"));
+        let results = chat_server_backup_lib::run_self_test();
+        for result in &results {
+            println!("{}", result.report_line());
+        }
+        let failed = results.iter().filter(|r| !r.passed).count();
+        println!(
+            "{}: {} check(s), {} failed",
+            if failed == 0 { "SELF-TEST PASSED" } else { "SELF-TEST FAILED" },
+            results.len(),
+            failed
+        );
+        std::process::exit(if failed == 0 { 0 } else { 1 });
+    }
+
     if let Some(pos) = args.iter().position(|a| a == "--verify-backup") {
         if let Some(target) = args.get(pos + 1) {
             match load_backup(Path::new(target), true) {
